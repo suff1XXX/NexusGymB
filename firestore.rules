@@ -1,0 +1,215 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true;
+    }
+
+    function own(uid) {
+      return signedIn()
+        && request.auth.uid == uid;
+    }
+
+    function owner() {
+      return signedIn()
+        && request.auth.uid == 'ljYr2MF28zg1zAFsD7M1sNH6s8O2';
+    }
+
+    function text(v, max) {
+      return v is string
+        && v.size() <= max;
+    }
+
+    function profile(d) {
+      return d.keys().hasAll(['name', 'email', 'photo', 'createdAt', 'activeProgramId', 'customId'])
+        && d.keys().hasOnly(['name', 'email', 'photo', 'createdAt', 'activeProgramId', 'customId'])
+        && d.customId is int
+        && d.customId > 0
+        && text(d.name, 200)
+        && text(d.email, 320)
+        && text(d.photo, 2000)
+        && d.createdAt is number
+        && text(d.activeProgramId, 100);
+    }
+
+    function newNumber(uid, n) {
+      return n is int
+        && n > 0
+        && (!exists(/databases/$(database)/documents/users/$(uid))
+          || !('customId' in get(/databases/$(database)/documents/users/$(uid)).data))
+        && getAfter(/databases/$(database)/documents/counters/users).data.lastId == n
+        && ((!exists(/databases/$(database)/documents/counters/users)
+            && n == 1)
+          || (exists(/databases/$(database)/documents/counters/users)
+            && n == get(/databases/$(database)/documents/counters/users).data.lastId + 1))
+        && getAfter(/databases/$(database)/documents/userNumbers/$(string(n))).data.uid == uid;
+    }
+
+    match /counters/users {
+      allow get: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasAll(['lastId'])
+        && request.resource.data.keys().hasOnly(['lastId'])
+        && newNumber(request.auth.uid, request.resource.data.lastId)
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.customId == request.resource.data.lastId;
+    }
+
+    match /userNumbers/{number} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasAll(['uid'])
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid
+        && number == string(getAfter(/databases/$(database)/documents/counters/users).data.lastId)
+        && newNumber(request.auth.uid, getAfter(/databases/$(database)/documents/counters/users).data.lastId)
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.customId == getAfter(/databases/$(database)/documents/counters/users).data.lastId;
+    }
+
+    function day(d) {
+      return d is map
+        && d.keys().hasAll(['weekday', 'name', 'groups', 'items'])
+        && d.keys().hasOnly(['weekday', 'name', 'groups', 'items'])
+        && d.weekday is int
+        && d.weekday >= 0
+        && d.weekday <= 6
+        && text(d.name, 100)
+        && text(d.groups, 200)
+        && d.items is list
+        && d.items.size() <= 30;
+    }
+
+    function dayList(ds) {
+      return ds is list
+        && ds.size() >= 1
+        && ds.size() <= 7
+        && day(ds[0])
+        && (ds.size() < 2
+          || day(ds[1]))
+        && (ds.size() < 3
+          || day(ds[2]))
+        && (ds.size() < 4
+          || day(ds[3]))
+        && (ds.size() < 5
+          || day(ds[4]))
+        && (ds.size() < 6
+          || day(ds[5]))
+        && (ds.size() < 7
+          || day(ds[6]));
+    }
+
+    function program(d) {
+      return d.keys().hasAll(['name', 'type', 'days', 'archived', 'updatedAt'])
+        && d.keys().hasOnly(['name', 'type', 'days', 'archived', 'updatedAt'])
+        && text(d.name, 100)
+        && d.name.size() > 0
+        && d.type in ['Верх / Низ', 'Спліт', 'Все тіло', 'Власна програма']
+        && dayList(d.days)
+        && d.archived is bool
+        && d.updatedAt is number;
+    }
+
+    function session(d) {
+      return d.keys().hasAll(['programId', 'name', 'date', 'startedAt', 'endedAt', 'status', 'index', 'restEnd', 'timerEnd', 'items', 'logs', 'skipped', 'updatedAt'])
+        && d.keys().hasOnly(['programId', 'name', 'date', 'startedAt', 'endedAt', 'status', 'index', 'restEnd', 'timerEnd', 'items', 'logs', 'skipped', 'updatedAt'])
+        && text(d.programId, 100)
+        && text(d.name, 100)
+        && text(d.date, 10)
+        && d.startedAt is number
+        && d.endedAt is number
+        && d.status in ['active', 'completed']
+        && d.index is int
+        && d.index>=0
+        && d.items is list
+        && d.items.size() > 0
+        && d.items.size()<=30
+        && d.index<=d.items.size()
+        && d.logs is list
+        && d.logs.size()<=600
+        && d.skipped is list
+        && d.skipped.size()<=30
+        && d.restEnd is number
+        && d.timerEnd is number
+        && d.updatedAt is number;
+    }
+
+    function exercise(d) {
+      return d.keys().hasAll(['name', 'equipment', 'primary', 'secondary', 'purpose', 'setup', 'position', 'technique', 'breathing', 'mistakes', 'caution', 'image', 'video', 'archived', 'updatedAt'])
+        && d.keys().hasOnly(['name', 'equipment', 'primary', 'secondary', 'purpose', 'setup', 'position', 'technique', 'breathing', 'mistakes', 'caution', 'image', 'video', 'archived', 'updatedAt'])
+        && text(d.name, 100)
+        && d.name.size() > 0
+        && text(d.equipment, 100)
+        && d.primary in ['Груди', 'Спина', 'Плечі', 'Біцепс', 'Трицепс', 'Ноги', 'Сідниці', 'Прес', 'Кардіо', 'Розминка']
+        && text(d.secondary, 200)
+        && text(d.purpose, 4000)
+        && text(d.setup, 4000)
+        && text(d.position, 4000)
+        && text(d.technique, 4000)
+        && text(d.breathing, 4000)
+        && text(d.mistakes, 4000)
+        && text(d.caution, 4000)
+        && text(d.image, 2000)
+        && text(d.video, 2000)
+        && d.archived is bool
+        && d.updatedAt is number;
+    }
+
+    match /users/{uid} {
+      allow read: if own(uid);
+      allow create: if own(uid)
+        && profile(request.resource.data)
+        && newNumber(uid, request.resource.data.customId);
+      allow update: if own(uid)
+        && profile(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && (('customId' in resource.data
+            && request.resource.data.customId == resource.data.customId)
+          || (!('customId' in resource.data)
+            && newNumber(uid, request.resource.data.customId)));
+      match /programs/{id} {
+        allow read, delete: if own(uid);
+        allow create, update: if own(uid)
+          && program(request.resource.data);
+      }
+      match /sessions/{id} {
+        allow read: if own(uid);
+        allow create: if own(uid)
+          && session(request.resource.data)
+          && request.resource.data.status == 'active';
+        allow update: if own(uid)
+          && session(request.resource.data)
+          && resource.data.status == 'active'
+          && request.resource.data.items == resource.data.items
+          && request.resource.data.programId == resource.data.programId
+          && request.resource.data.startedAt == resource.data.startedAt;
+      }
+    }
+
+    match /exercises/{id} {
+      allow read: if signedIn();
+      allow create, update: if owner()
+        && exercise(request.resource.data);
+    }
+
+    match /programTemplates/{id} {
+      allow read: if signedIn();
+      allow create, update: if owner()
+        && program(request.resource.data);
+    }
+
+    match /settings/site {
+      allow read: if signedIn();
+      allow create, update: if owner()
+        && request.resource.data.keys().hasAll(['name', 'description', 'announcement', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['name', 'description', 'announcement', 'updatedAt'])
+        && text(request.resource.data.name, 40)
+        && text(request.resource.data.description, 300)
+        && text(request.resource.data.announcement, 1000)
+        && request.resource.data.updatedAt is number;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+  }
+}

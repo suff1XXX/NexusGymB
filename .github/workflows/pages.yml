@@ -1,0 +1,48 @@
+name: Publish GitHub Pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check JavaScript
+        run: |
+          for file in public/js/*.js tools/*.mjs; do node --check "$file"; done
+      - name: Check public files for private credentials
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const walk = dir => fs.readdirSync(dir, {withFileTypes:true}).flatMap(entry => {
+            const path = dir + '/' + entry.name;
+            if (entry.isSymbolicLink()) throw Error('Symlinks are not allowed in public: ' + path);
+            return entry.isDirectory() ? walk(path) : [path];
+          });
+          const privateName = /(?:^|\/)(?:\.env(?:\.|$)|secrets(?:\/|$)|credentials\.json$)|service[-_]?account|firebase-adminsdk|\.(?:pem|key|p12|pfx)$/i;
+          const privateContent = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"private_key"\s*:|(?:TELEGRAM_BOT_TOKEN|OPENAI_API_KEY|CLIENT_SECRET)\s*[:=]\s*["']?[A-Za-z0-9_-]{12}/;
+          for (const file of walk('public')) {
+            if (privateName.test(file) || privateContent.test(fs.readFileSync(file,'utf8'))) {
+              throw Error('Private credentials must be removed from: ' + file);
+            }
+          }
+          NODE
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
