@@ -1,4 +1,5 @@
 import { firebaseConfig, OWNER_UID } from "./config.js";
+import { loginTime, newerLogin, loginMetadata } from "./login-metadata.js";
 let api,
   registering = false;
 const authListeners = new Set();
@@ -21,7 +22,7 @@ export async function connect() {
       );
   };
   auth.languageCode = "uk";
-  const actionSettings = () => ({ url: new URL("./", window.location.href).href });
+  const actionSettings = () => ({ url: new URL("index.html", window.location.href).href });
   api = {
     auth,
     async isOwner() {
@@ -90,7 +91,23 @@ export async function connect() {
         t.set(C.doc(db, "userNumbers", String(next)), { uid: user.uid });
         t.set(ref, { ...profile, customId: next });
       });
-      return (await C.getDocFromServer(ref)).data();
+      let profile = (await C.getDocFromServer(ref)).data();
+      const time = loginTime(user);
+      if (newerLogin(profile, time)) {
+        try {
+          const metadata = await loginMetadata(time);
+          profile = await C.runTransaction(db, async (t) => {
+            const current = (await t.get(ref)).data();
+            // Another tab/device may have recorded a newer login while IP was loading.
+            if (!newerLogin(current, time)) return current;
+            t.update(ref, metadata);
+            return { ...current, ...metadata };
+          });
+        } catch (error) {
+          console.warn("Не вдалося зберегти дані останнього входу:", error.code || "unavailable");
+        }
+      }
+      return profile;
     },
     async list(path) {
       requireOnline();

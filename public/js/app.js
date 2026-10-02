@@ -31,6 +31,9 @@ const S = {
   route: document.body.dataset.page || "home",
   filter: "Усі",
   query: "",
+  equipment: "",
+  catalogSort: "name",
+  withPhoto: false,
   loaded: false,
 };
 let db,
@@ -39,7 +42,8 @@ let db,
   chosenDay = null,
   busy = false,
   bootError = "",
-  authMode = { register: "register", reset: "reset" }[document.body.dataset.page] || "login",
+  authMode = "login",
+  authDraft = { email: "", name: "" },
   authNotice = "",
   unsubscribeAuth;
 const esc = (v) =>
@@ -146,26 +150,19 @@ function authPanel() {
         <p class="small muted">Якщо листа немає, перевір «Спам».</p>
       </section>
     `;
-  const register = authMode === "register",
-    reset = authMode === "reset";
+  const register = authMode === "register";
   return `
     <section class="auth-panel">
       <div class="auth-tabs">
-        ${btn("Вхід", "auth-mode", 'data-id="login"', authMode === "login" ? "" : "ghost")}${btn(
+        ${btn("Вхід", "auth-mode", `type="button" data-id="login" aria-pressed="${!register}"`, !register ? "" : "ghost")}${btn(
           "Реєстрація",
           "auth-mode",
-          'data-id="register"',
+          `type="button" data-id="register" aria-pressed="${register}"`,
           register ? "" : "ghost",
         )}
       </div>
-      <h1>${reset ? "Відновити пароль" : register ? "Створи акаунт" : "Вхід"}</h1>
+      <h1 tabindex="-1">${register ? "Створи акаунт" : "Вхід"}</h1>
       ${
-        reset
-          ? `
-            <p class="muted small">Вкажи email, щоб отримати посилання для зміни пароля.</p>
-          `
-          : ""
-      }${
         authNotice
           ? `
             <div class="notice">${esc(authNotice)}</div>
@@ -178,32 +175,27 @@ function authPanel() {
             ? `
               <label>
                 Ім’я
-                <input name="name" autocomplete="name" maxlength="100" required />
+                <input name="name" autocomplete="name" value="${esc(authDraft.name)}" maxlength="100" required />
               </label>
             `
             : ""
         }
         <label>
           Email
-          <input type="email" name="email" autocomplete="email" maxlength="320" required />
+          <input type="email" name="email" autocomplete="email" value="${esc(authDraft.email)}" maxlength="320" required />
+        </label>
+        <label>
+          Пароль
+          <input
+            type="password"
+            name="password"
+            autocomplete="${register ? "new-password" : "current-password"}"
+            ${register ? 'minlength="8"' : ""}
+            maxlength="4096"
+            required
+          />
         </label>
         ${
-          reset
-            ? ""
-            : `
-              <label>
-                Пароль
-                <input
-                  type="password"
-                  name="password"
-                  autocomplete="${register ? "new-password" : "current-password"}"
-                  ${register ? 'minlength="8"' : ""}
-                  maxlength="4096"
-                  required
-                />
-              </label>
-            `
-        }${
           register
             ? `
               <label>
@@ -222,14 +214,14 @@ function authPanel() {
             : ""
         }
         <button type="submit" class="btn wide" ${!db ? "disabled" : ""}>
-          ${reset ? "Надіслати посилання" : register ? "Зареєструватися" : "Увійти"}
+          ${register ? "Зареєструватися" : "Увійти"}
         </button>
         <div class="form-error" role="alert"></div>
       </form>
       ${
-        !reset
-          ? btn("Забув пароль?", "auth-mode", 'data-id="reset"', "auth-link")
-          : btn("Повернутися до входу", "auth-mode", 'data-id="login"', "auth-link")
+        !register
+          ? btn("Забули пароль?", "reset-password", `type="button" ${!db ? "disabled" : ""}`, "auth-link")
+          : ""
       }
     </section>
   `;
@@ -244,12 +236,9 @@ const pageFiles = {
   editor: "editor.html",
   session: "workout.html",
   login: "index.html",
-  register: "register.html",
-  reset: "reset.html",
-  verify: "verify.html",
 };
 const currentPage = document.body.dataset.page || "login";
-const authPages = ["login", "register", "reset", "verify"];
+const authPages = ["login"];
 async function navigate(page, query = "") {
   const card = document.querySelector(".auth-card");
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -308,6 +297,12 @@ function avatar() {
       `;
 }
 function login() {
+  const form = document.querySelector("#auth-form");
+  if (form) {
+    authDraft.email = form.elements.email.value;
+    if (form.elements.name) authDraft.name = form.elements.name.value;
+  }
+  document.title = `${S.user && !S.user.emailVerified ? "Підтвердження пошти" : authMode === "register" ? "Реєстрація" : "Вхід"} — Nexus GymB`;
   const firstRender = !document.querySelector(".auth-card");
   root.innerHTML = `
     <main class="login">
@@ -430,7 +425,7 @@ window.addEventListener(
 
 function render() {
   if (!S.user) {
-    if (!authPages.includes(currentPage) || currentPage === "verify") {
+    if (!authPages.includes(currentPage)) {
       navigate("login");
       return;
     }
@@ -438,8 +433,8 @@ function render() {
     return;
   }
   if (!S.user.emailVerified) {
-    if (currentPage !== "verify") {
-      navigate("verify");
+    if (!authPages.includes(currentPage)) {
+      navigate("login");
       return;
     }
     login();
@@ -503,12 +498,21 @@ function empty(title, desc, button = "") {
     </div>
   `;
 }
+function exercisePhoto(item, size = "thumb") {
+  const current = S.exercises.find((e) => e.id === item.exerciseId);
+  const url = safeURL(item.image) || safeURL(item.snapshot?.image) || safeURL(current?.image);
+  return `<span class="exercise-photo photo-${size}">
+    <span class="photo-placeholder" aria-hidden="true">${icon("exercises")}<span>Фото відсутнє</span></span>
+    ${url ? `<img data-exercise-photo src="${esc(url)}" alt="${esc(item.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : ""}
+  </span>`;
+}
 function exerciseRows(items) {
   return items
     .map(
       (i, n) => `
         <div class="exercise-row">
           <span class="number">${String(n + 1).padStart(2, "0")}</span>
+          ${exercisePhoto(i)}
           <div class="grow">
             <h3>${esc(i.name)}</h3>
             <p>
@@ -774,6 +778,8 @@ function programs() {
   );
 }
 function catalog() {
+  const equipment = [...new Set(S.exercises.filter((e) => !e.archived).map((e) => e.equipment).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, "uk"));
   return (
     heading("Бібліотека руху", "Інструкції до вправ і тренажерів.") +
     `
@@ -784,7 +790,7 @@ function catalog() {
         placeholder="Пошук вправи або тренажера…"
         value="${esc(S.query)}"
       />
-      <div class="filters">
+      <div class="filters" role="group" aria-label="М’язові групи">
         ${["Усі", ...groups]
           .map(
             (g) => `
@@ -792,6 +798,7 @@ function catalog() {
                 class="chip ${S.filter === g ? "active" : ""}"
                 data-action="filter"
                 data-id="${g}"
+                aria-pressed="${S.filter === g}"
               >
                 ${g}
               </button>
@@ -799,25 +806,48 @@ function catalog() {
           )
           .join("")}
       </div>
+      <div class="catalog-tools">
+        <label>Обладнання
+          <select id="catalog-equipment">
+            <option value="">Усе обладнання</option>
+            ${equipment.map((name) => `<option value="${esc(name)}" ${S.equipment === name ? "selected" : ""}>${esc(name)}</option>`).join("")}
+          </select>
+        </label>
+        <label>Сортування
+          <select id="catalog-sort">
+            <option value="name" ${S.catalogSort === "name" ? "selected" : ""}>За назвою · А–Я</option>
+            <option value="group" ${S.catalogSort === "group" ? "selected" : ""}>За м’язовою групою</option>
+          </select>
+        </label>
+        <label class="photo-toggle"><input id="catalog-photo" type="checkbox" ${S.withPhoto ? "checked" : ""} /> Лише з фото</label>
+        ${btn("Скинути фільтри", "reset-catalog", "", "ghost")}
+      </div>
       <div id="catalog-results">${catalogResults()}</div>
     `
   );
+}
+function matchesExercise(e, query) {
+  const normalize = (value) => String(value ?? "").toLocaleLowerCase("uk").replace(/[’'`ʼ]/g, "").replace(/\s+/g, " ").trim();
+  const text = normalize(`${e.name ?? ""} ${e.equipment ?? ""} ${e.primary ?? ""} ${e.secondary ?? ""}`);
+  return normalize(query).split(" ").filter(Boolean).every((word) => text.includes(word));
 }
 function catalogResults() {
   const list = S.exercises.filter(
     (e) =>
       !e.archived &&
       (S.filter === "Усі" || e.primary === S.filter) &&
-      `${e.name} ${e.equipment}`.toLowerCase().includes(S.query.toLowerCase()),
-  );
-  return list.length
+      (!S.equipment || e.equipment === S.equipment) &&
+      (!S.withPhoto || !!safeURL(e.image)) &&
+      matchesExercise(e, S.query),
+  ).sort((a, b) => (S.catalogSort === "group" ? String(a.primary || "").localeCompare(String(b.primary || ""), "uk") : 0) || String(a.name || "").localeCompare(String(b.name || ""), "uk"));
+  return `<p class="small muted" role="status" aria-live="polite" aria-atomic="true">Знайдено вправ: ${list.length}</p>` + (list.length
     ? `
         <div class="catalog">
           ${list
             .map(
               (e) => `
-                <button class="card exercise-card" data-action="detail" data-id="${e.id}">
-                  <span class="number">${icon("exercises")}</span>
+                <button class="card exercise-card" data-action="detail" data-id="${esc(e.id)}">
+                  ${exercisePhoto(e, "card")}
                   <h3>${esc(e.name)}</h3>
                   <p>${esc(e.primary)} · ${esc(e.equipment)}</p>
                 </button>
@@ -831,11 +861,12 @@ function catalogResults() {
           ${empty(
             "Вправ поки не знайдено",
             S.exercises.length
-              ? "Зміни пошуковий запит або м’язову групу."
+              ? "Спробуй іншу назву, обладнання або м’язову групу."
               : "Власник має додати вправи до спільного каталогу.",
+            S.exercises.some((e) => !e.archived) ? btn("Показати всі вправи", "reset-catalog", "", "secondary") : "",
           )}
         </section>
-      `;
+      `);
 }
 function field(label, name, value = "", type = "text", extra = "") {
   return `
@@ -1004,7 +1035,7 @@ function programEditor() {
                       (i, j) => `
                         <div class="item-editor">
                           <div class="row wrap">
-                            <b>${j + 1}. ${esc(i.name)}</b>
+                            <div class="exercise-heading">${exercisePhoto(i)}<b>${j + 1}. ${esc(i.name)}</b></div>
                             <div class="actions">
                               <button
                                 type="button"
@@ -1088,6 +1119,17 @@ function programEditor() {
                       `,
                     )
                     .join("")}
+                  <div class="formgrid picker-tools">
+                    <label>Знайти вправу
+                      <input type="search" id="picker-search-${n}" data-picker-search="${n}" placeholder="Назва, тренажер або м’язи…" />
+                    </label>
+                    <label>М’язова група
+                      <select id="picker-group-${n}" data-picker-group="${n}">
+                        <option value="">Усі групи</option>
+                        ${groups.map((group) => `<option value="${esc(group)}">${esc(group)}</option>`).join("")}
+                      </select>
+                    </label>
+                  </div>
                   <div class="row wrap">
                     <label style="flex:1;margin:10px 0">
                       Додати з каталогу
@@ -1097,7 +1139,7 @@ function programEditor() {
                           .filter((e) => !e.archived)
                           .map(
                             (e) => `
-                              <option value="${e.id}">${esc(e.name)}</option>
+                              <option value="${esc(e.id)}">${esc(e.name)} · ${esc(e.equipment)}</option>
                             `,
                           )
                           .join("")}
@@ -1209,17 +1251,7 @@ function sessionView() {
       <section class="card">
         <span class="badge">${esc(i.primary || "Тренування")}</span>
         <h2 class="workout-title" style="margin-top:20px">${esc(i.name)}</h2>
-        ${
-          safeURL(i.snapshot?.image)
-            ? `
-              <img
-                class="workout-image"
-                src="${esc(safeURL(i.snapshot.image))}"
-                alt="${esc(i.name)}"
-              />
-            `
-            : ""
-        }
+        ${exercisePhoto(i, "large")}
         <p class="muted">
           ${i.sets} підходи ·
           ${i.seconds ? `${i.seconds} сек` : esc(i.reps) + " повторень"}${
@@ -1340,6 +1372,7 @@ function admin() {
             .map(
               (e) => `
                 <div class="exercise-row">
+                  ${exercisePhoto(e)}
                   <div class="grow">
                     <h3>${esc(e.name)}</h3>
                     <p>${esc(e.primary)}${e.archived ? " · В архіві" : ""}</p>
@@ -1398,8 +1431,10 @@ ${esc(S.settings.announcement)}</textarea
     `
   );
 }
-function openModal(html) {
+function openModal(html, labelledBy = "") {
   modal.innerHTML = html;
+  if (labelledBy) modal.setAttribute("aria-labelledby", labelledBy);
+  else modal.removeAttribute("aria-labelledby");
   if (!modal.open) modal.showModal();
 }
 function detail(id, fromSession = false) {
@@ -1437,13 +1472,7 @@ function detail(id, fromSession = false) {
       <button class="mini-btn" data-action="close">Закрити</button>
     </div>
     <span class="badge">${esc(e.primary)}</span>
-    ${
-      safeURL(e.image)
-        ? `
-          <p><img src="${esc(safeURL(e.image))}" alt="${esc(e.name)}" /></p>
-        `
-        : ""
-    }${[
+    ${exercisePhoto({ ...e, exerciseId: id }, "large")}${[
       ["Обладнання", e.equipment],
       ["М’язи", `${e.primary}${e.secondary ? " · " + e.secondary : ""}`],
       ["Для чого", e.purpose],
@@ -1560,8 +1589,32 @@ async function action(a, b) {
     j = +b.dataset.j;
   switch (a) {
     case "auth-mode":
-      await navigate(id);
+      if (!["login", "register"].includes(id) || authMode === id) break;
+      authMode = id;
+      authNotice = "";
+      login();
+      document.querySelector(".auth-panel h1")?.focus();
       break;
+    case "reset-password": {
+      const form = document.querySelector("#auth-form");
+      const email = form.elements.email;
+      email.value = email.value.trim();
+      if (!email.reportValidity()) {
+        email.focus();
+        return;
+      }
+      if (!db) throw Error("Зачекай на підключення Firebase.");
+      const address = email.value;
+      form.querySelector(".form-error").textContent = "";
+      await db.resetPassword(address);
+      openModal(`
+        <h2 id="reset-email-title">Перевір пошту</h2>
+        <p>Якщо для <b>${esc(address)}</b> є обліковий запис, інструкцію для відновлення пароля надіслано на цю адресу.</p>
+        <p class="muted small">Лист може надійти за кілька хвилин. Перевір також папку «Спам».</p>
+        ${btn("Зрозуміло", "close", 'type="button" autofocus')}
+      `, "reset-email-title");
+      break;
+    }
     case "resend-email":
       await db.sendVerification();
       authNotice = "Лист надіслано. Перевір пошту та папку «Спам».";
@@ -1577,6 +1630,9 @@ async function action(a, b) {
       await boot();
       break;
     case "logout":
+      authMode = "login";
+      authNotice = "";
+      authDraft = { email: "", name: "" };
       await db.logout();
       break;
 
@@ -1593,7 +1649,21 @@ async function action(a, b) {
       break;
     case "filter":
       S.filter = id;
+      document.querySelectorAll('[data-action="filter"]').forEach((chip) => {
+        const selected = chip.dataset.id === id;
+        chip.classList.toggle("active", selected);
+        chip.setAttribute("aria-pressed", String(selected));
+      });
+      document.querySelector("#catalog-results").innerHTML = catalogResults();
+      break;
+    case "reset-catalog":
+      S.filter = "Усі";
+      S.query = "";
+      S.equipment = "";
+      S.catalogSort = "name";
+      S.withPhoto = false;
       render();
+      document.querySelector("#search")?.focus();
       break;
     case "close":
       modal.close();
@@ -1612,6 +1682,7 @@ async function action(a, b) {
         ${s.items
           .map(
             (i, k) => `
+              ${exercisePhoto(i)}
               <h3>
                 ${esc(i.name)}
                 ${
@@ -1857,11 +1928,13 @@ document.addEventListener("click", async (event) => {
   try {
     await action(b.dataset.action, b);
   } catch (e) {
-    if (b.dataset.action === "login")
-      document.querySelector("#login-error").innerHTML = `
-        <div class="error">${esc(err(e))}</div>
-      `;
-    else toast(err(e));
+    if (b.dataset.action === "reset-password") {
+      const box = document.querySelector("#auth-form .form-error");
+      if (box) {
+        box.className = "form-error error";
+        box.textContent = err(e);
+      } else toast(err(e));
+    } else toast(err(e));
   } finally {
     busy = false;
     if (b.isConnected) b.disabled = false;
@@ -1880,11 +1953,7 @@ document.addEventListener("submit", async (event) => {
       if (!db) throw Error("Зачекай на підключення Firebase.");
       const email = String(v.get("email") || "").trim(),
         password = String(v.get("password") || "");
-      if (authMode === "reset") {
-        await db.resetPassword(email);
-        authNotice = "Якщо ця пошта зареєстрована, на неї надійде лист для відновлення пароля.";
-        login();
-      } else if (authMode === "register") {
+      if (authMode === "register") {
         const name = String(v.get("name") || "").trim();
         if (!name) throw Error("Вкажи своє ім’я.");
         if (password !== v.get("confirm")) throw Error("Паролі не збігаються.");
@@ -1961,12 +2030,37 @@ document.addEventListener("submit", async (event) => {
     if (button.isConnected) button.disabled = false;
   }
 });
+function filterPicker(day) {
+  const query = document.querySelector(`#picker-search-${day}`).value;
+  const group = document.querySelector(`#picker-group-${day}`).value;
+  const select = document.querySelector(`#add-${day}`);
+  const selected = select.value;
+  const list = S.exercises.filter((e) => !e.archived && (!group || e.primary === group) && matchesExercise(e, query));
+  select.innerHTML = `<option value="">${list.length ? `Оберіть вправу · знайдено ${list.length}` : "Нічого не знайдено — зміни пошук"}</option>` + list.map((e) => `<option value="${esc(e.id)}">${esc(e.name)} · ${esc(e.equipment)}</option>`).join("");
+  select.value = list.some((e) => e.id === selected) ? selected : "";
+}
 document.addEventListener("input", (event) => {
+  if (event.target.dataset.pickerSearch !== undefined) filterPicker(event.target.dataset.pickerSearch);
   if (event.target.id === "search") {
     S.query = event.target.value;
     document.querySelector("#catalog-results").innerHTML = catalogResults();
   }
 });
+document.addEventListener("change", (event) => {
+  const target = event.target;
+  if (target.dataset.pickerGroup !== undefined) {
+    filterPicker(target.dataset.pickerGroup);
+    return;
+  }
+  if (target.id === "catalog-equipment") S.equipment = target.value;
+  else if (target.id === "catalog-sort") S.catalogSort = target.value;
+  else if (target.id === "catalog-photo") S.withPhoto = target.checked;
+  else return;
+  document.querySelector("#catalog-results").innerHTML = catalogResults();
+});
+document.addEventListener("error", (event) => {
+  if (event.target.matches?.("img[data-exercise-photo]")) event.target.remove();
+}, true);
 
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;

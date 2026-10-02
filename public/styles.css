@@ -659,6 +659,98 @@ p {
   font-size: 14px;
   color: var(--muted);
 }
+.exercise-photo {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  flex-shrink: 0;
+  border-radius: 14px;
+  background: var(--soft);
+}
+.exercise-photo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--soft);
+}
+.photo-placeholder {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.photo-placeholder .icon {
+  width: 30px;
+  height: 30px;
+  color: var(--blue);
+}
+.photo-thumb {
+  width: 56px;
+  height: 56px;
+}
+.photo-thumb .photo-placeholder span {
+  display: none;
+}
+.photo-card {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  margin-bottom: 18px;
+}
+.photo-large {
+  width: 100%;
+  height: 260px;
+  margin: 18px 0;
+}
+.exercise-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.exercise-heading b,
+.exercise-card h3 {
+  overflow-wrap: anywhere;
+}
+.catalog-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.catalog-tools label {
+  flex: 1 1 180px;
+  min-width: 0;
+  margin: 0;
+}
+.catalog-tools .photo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-height: 46px;
+}
+.photo-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+@media (max-width: 480px) {
+  .exercise-row:has(.photo-thumb) {
+    gap: 9px;
+  }
+  .photo-large {
+    height: 210px;
+  }
+}
 label {
   display: block;
   font-size: 14px;

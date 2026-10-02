@@ -23,14 +23,18 @@ service cloud.firestore {
 
     function profile(d) {
       return d.keys().hasAll(['name', 'email', 'photo', 'createdAt', 'activeProgramId', 'customId'])
-        && d.keys().hasOnly(['name', 'email', 'photo', 'createdAt', 'activeProgramId', 'customId'])
+        && d.keys().hasOnly(['name', 'email', 'photo', 'createdAt', 'activeProgramId', 'customId', 'lastDeviceId', 'lastLogin', 'lastLoginIp', 'lastLoginTime'])
         && d.customId is int
         && d.customId > 0
         && text(d.name, 200)
         && text(d.email, 320)
         && text(d.photo, 2000)
         && d.createdAt is number
-        && text(d.activeProgramId, 100);
+        && text(d.activeProgramId, 100)
+        && (!('lastDeviceId' in d) || (text(d.lastDeviceId, 84) && d.lastDeviceId.matches('dev_[a-zA-Z0-9_-]{8,80}')))
+        && (!('lastLogin' in d) || text(d.lastLogin, 30))
+        && (!('lastLoginIp' in d) || text(d.lastLoginIp, 45))
+        && (!('lastLoginTime' in d) || text(d.lastLoginTime, 30));
     }
 
     function newNumber(uid, n) {
