@@ -24,6 +24,7 @@ export async function connect() {
   auth.languageCode = "uk";
   const actionSettings = () => ({ url: new URL("index.html", window.location.href).href });
   api = {
+    timestamp: () => C.serverTimestamp(),
     auth,
     async isOwner() {
       return auth.currentUser?.uid === OWNER_UID;
@@ -84,7 +85,7 @@ export async function connect() {
               name: user.displayName || "",
               email: user.email || "",
               photo: user.photoURL || "",
-              createdAt: Date.now(),
+              createdAt: Date.parse(user.metadata?.creationTime || "") || Date.now(),
               activeProgramId: "",
             };
         t.set(counter, { lastId: next });
@@ -95,7 +96,8 @@ export async function connect() {
       const time = loginTime(user);
       if (newerLogin(profile, time)) {
         try {
-          const metadata = await loginMetadata(time);
+          const registeredAt = Date.parse(user.metadata?.creationTime || "");
+          const metadata = { ...await loginMetadata(time), ...(Number.isFinite(registeredAt) ? { registeredAt } : {}) };
           profile = await C.runTransaction(db, async (t) => {
             const current = (await t.get(ref)).data();
             // Another tab/device may have recorded a newer login while IP was loading.
@@ -125,6 +127,13 @@ export async function connect() {
       requireOnline();
       await C.setDoc(C.doc(db, path), data);
     },
+    async saveMany(entries) {
+      requireOnline();
+      if (!entries.length || entries.length > 100) throw Error("Імпортуй від 1 до 100 записів.");
+      const batch = C.writeBatch(db);
+      for (const [path, data] of entries) batch.set(C.doc(db, path), data);
+      await batch.commit();
+    },
     async patch(path, data) {
       requireOnline();
       await C.updateDoc(C.doc(db, path), data);
@@ -133,15 +142,11 @@ export async function connect() {
       requireOnline();
       await C.deleteDoc(C.doc(db, path));
     },
-    async seed(entries) {
+    async removeMany(paths) {
       requireOnline();
-      await C.runTransaction(db, async (t) => {
-        const refs = entries.map(([p]) => C.doc(db, p)),
-          snaps = await Promise.all(refs.map((r) => t.get(r)));
-        entries.forEach(([, d], i) => {
-          if (!snaps[i].exists()) t.set(refs[i], d);
-        });
-      });
+      const batch = C.writeBatch(db);
+      for (const path of paths) batch.delete(C.doc(db, path));
+      await batch.commit();
     },
   };
   return api;
