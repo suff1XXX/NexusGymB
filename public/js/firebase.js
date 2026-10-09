@@ -1,5 +1,6 @@
 import { firebaseConfig, OWNER_UID } from "./config.js";
 import { loginTime, newerLogin, loginMetadata } from "./login-metadata.js";
+import { createOfflineStore, retryable, timeout } from "./offline.js";
 let api,
   registering = false;
 const authListeners = new Set();
@@ -21,11 +22,62 @@ export async function connect() {
         "Немає з’єднання. Введені дані залишилися на екрані. Спробуйте знову після відновлення мережі.",
       );
   };
+  const stores = new Map();
+  const store = (uid = auth.currentUser?.uid) => {
+    if (!uid) throw Error("Спочатку увійди в акаунт.");
+    if (!stores.has(uid)) stores.set(uid, createOfflineStore(localStorage, uid));
+    return stores.get(uid);
+  };
+  const locked = (name, fn) => navigator.locks ? navigator.locks.request(name, fn) : fn();
+  const notifySync = (error = "") => window.dispatchEvent(new CustomEvent("nexus-sync", { detail: { pending: auth.currentUser ? store().pending() : 0, error } }));
+  const commit = async (operations) => {
+    const batch = C.writeBatch(db);
+    for (const op of operations) {
+      const ref = C.doc(db, op.path);
+      if (op.kind === "remove") batch.delete(ref);
+      else if (op.kind === "patch") batch.update(ref, op.data);
+      else batch.set(ref, op.data);
+    }
+    await timeout(batch.commit());
+  };
+  const mutate = async (operations) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !auth.currentUser.emailVerified) throw Error("Увійди та підтвердь пошту.");
+    const personal = operations.every((op) => op.path === `users/${uid}` || op.path.startsWith(`users/${uid}/`));
+    if (!personal) { requireOnline(); await commit(operations); return; }
+    const queue = store(uid);
+    const id = await locked(`nexus-data-${uid}`, () => queue.enqueue(operations));
+    notifySync();
+    if (navigator.onLine) {
+      try { await api.sync(); }
+      catch (error) {
+        if (!retryable(error)) {
+          await locked(`nexus-data-${uid}`, () => queue.acknowledge(id, false));
+          notifySync(error.message); throw error;
+        }
+      }
+    }
+  };
   auth.languageCode = "uk";
   const actionSettings = () => ({ url: new URL("index.html", window.location.href).href });
   api = {
     timestamp: () => C.serverTimestamp(),
     auth,
+    pending: () => auth.currentUser ? store().pending() : 0,
+    async sync() {
+      const uid = auth.currentUser?.uid;
+      if (!uid || !navigator.onLine) return;
+      const queue = store(uid);
+      return locked(`nexus-sync-${uid}`, async () => {
+        while (queue.pending() && auth.currentUser?.uid === uid && navigator.onLine) {
+          const job = queue.jobs()[0];
+          try { await commit(job.operations); }
+          catch (error) { notifySync(error.message); throw error; }
+          await locked(`nexus-data-${uid}`, () => queue.acknowledge(job.id));
+          notifySync();
+        }
+      });
+    },
     async isOwner() {
       return auth.currentUser?.uid === OWNER_UID;
     },
@@ -112,42 +164,46 @@ export async function connect() {
       return profile;
     },
     async list(path) {
-      requireOnline();
-      return (await C.getDocsFromServer(C.collection(db, path))).docs.map((x) => ({
-        ...x.data(),
-        id: x.id,
-      }));
+      const queue = store();
+      if (navigator.onLine) try {
+        const docs = (await timeout(C.getDocsFromServer(C.collection(db, path)))).docs.map((x) => ({ ...x.data(), id: x.id }));
+        await locked(`nexus-data-${auth.currentUser.uid}`, () => queue.cache(path, docs));
+      } catch (error) { if (!retryable(error)) throw error; }
+      return queue.cached(path);
     },
     async get(path) {
-      requireOnline();
-      const s = await C.getDocFromServer(C.doc(db, path));
-      return s.exists() ? s.data() : null;
+      const queue = store();
+      if (navigator.onLine) try {
+        const s = await timeout(C.getDocFromServer(C.doc(db, path)));
+        await locked(`nexus-data-${auth.currentUser.uid}`, () => queue.cache(path, s.exists() ? s.data() : null));
+      } catch (error) { if (!retryable(error)) throw error; }
+      return queue.cached(path);
     },
     async save(path, data) {
-      requireOnline();
-      await C.setDoc(C.doc(db, path), data);
+      await mutate([{ kind: "save", path, data }]);
     },
     async saveMany(entries) {
-      requireOnline();
       if (!entries.length || entries.length > 100) throw Error("Імпортуй від 1 до 100 записів.");
-      const batch = C.writeBatch(db);
-      for (const [path, data] of entries) batch.set(C.doc(db, path), data);
-      await batch.commit();
+      await mutate(entries.map(([path, data]) => ({ kind: "save", path, data })));
     },
     async patch(path, data) {
-      requireOnline();
-      await C.updateDoc(C.doc(db, path), data);
+      await mutate([{ kind: "patch", path, data }]);
     },
     async remove(path) {
-      requireOnline();
-      await C.deleteDoc(C.doc(db, path));
+      await mutate([{ kind: "remove", path }]);
     },
     async removeMany(paths) {
-      requireOnline();
-      const batch = C.writeBatch(db);
-      for (const path of paths) batch.delete(C.doc(db, path));
-      await batch.commit();
+      await mutate(paths.map((path) => ({ kind: "remove", path })));
     },
+  };
+  const onlineProfile = api.profile;
+  api.profile = async (user) => {
+    const queue = store(user.uid), path = `users/${user.uid}`;
+    if (navigator.onLine) try {
+      const data = await timeout(onlineProfile(user), 12000);
+      await locked(`nexus-data-${user.uid}`, () => queue.cache(path, data));
+    } catch (error) { if (!retryable(error)) throw error; }
+    return queue.cached(path);
   };
   return api;
 }

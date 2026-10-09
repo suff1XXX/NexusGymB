@@ -1,6 +1,12 @@
 import { exerciseData, parseImport, importExample } from "./import.js";
 import { ratingValue, ratingSummary, commentText } from "./social.js";
 import { blankPerformance, performanceData } from "./performance.js";
+import { matchesExercise, filterExercises } from "./catalog.js";
+import { exerciseKey, previousResults, repeatProgram, rescheduleSession, monthDays, calendarEvents, progressSeries, exportData, exportCsv } from "./training-data.js";
+import { draftKey, saveDraft, loadDraft, removeDraft } from "./drafts.js";
+import { undoLastSet, editCompletedSession, filterHistory } from "./history.js";
+import { parseBackup, backupEntries } from "./backup.js";
+import { expiredTimers, createTimerSound } from "./notifications.js";
 import { connect } from "./firebase.js";
 import {
   days,
@@ -21,6 +27,10 @@ import {
   validMetrics,
   setPlan,
   pastSession,
+  plannedSession,
+  startPlannedSession,
+  hasWorkoutContent,
+  completeTextSession,
 } from "./model.js";
 const root = document.querySelector("#app"),
   modal = document.querySelector("#modal");
@@ -43,12 +53,24 @@ const S = {
   catalogSort: "name",
   withPhoto: false,
   catalogScope: "all",
+  adminCatalog: { filter: "Усі", query: "", equipment: "", catalogSort: "name", withPhoto: false, favoritesOnly: false, catalogScope: "shared", archive: "all" },
   loaded: false,
+  calendarMonth: localDate().slice(0, 7),
+  calendarDate: localDate(),
+  progressMetric: "weight",
+  progressExercise: "",
+  progressPeriod: "90",
+  historyFilters: { query: "", from: "", to: "", exercise: "" },
+  timerSound: true,
+  timerVibration: false,
+  syncError: "",
 };
 let db,
   editor,
   editorTemplate = false,
   editorHistory = false,
+  editorPlanned = false,
+  plannedDate = localDate(),
   editorOpenDay = null,
   historyDate = localDate(),
   historyMinutes = 0,
@@ -60,6 +82,9 @@ let db,
   authDraft = { email: "", name: "" },
   authNotice = "",
   unsubscribeAuth;
+let editorDraftKey = "", draftRestored = false, draftStored = false;
+let restoreDraft = null;
+const timerSound = createTimerSound(), notifiedTimers = new Set();
 const esc = (v) =>
   String(v ?? "").replace(
     /[&<>"']/g,
@@ -274,11 +299,12 @@ async function navigate(page, query = "") {
 
   window.location.assign(pageFiles[page] + query);
 }
-function prepareEditor() {
+function prepareEditor(restore = true) {
   const q = new URLSearchParams(location.search);
   editorTemplate = q.get("template") === "1";
   editorHistory = !editorTemplate && q.get("history") === "1";
-  editorOpenDay = editorHistory ? 0 : null;
+  editorPlanned = !editorTemplate && !editorHistory && q.get("planned") === "1";
+  editorOpenDay = editorHistory || editorPlanned ? 0 : null;
   if (editorTemplate && !owner()) {
     S.route = "home";
     return;
@@ -295,10 +321,52 @@ function prepareEditor() {
   if (editorHistory) {
     editor = { name: "Минуле тренування", type: "Власна програма", days: [{ weekday: 0, name: "Тренування", groups: "", items: [] }] };
   }
-  if (!editor) {
-    S.route = editorTemplate ? "admin" : "program";
-    toast("Програму не знайдено.");
+  if (editorPlanned) {
+    const session = id ? S.sessions.find((s) => s.id === id && s.status === "planned") : null;
+    plannedDate = session?.date || (q.get("date") >= localDate() ? q.get("date") : localDate());
+    editor = id && !session ? null : { ...(session ? { id: session.id } : {}),
+      name: session?.name || "Окреме тренування", type: "Власна програма",
+      days: [{ weekday: 0, name: "Тренування", groups: "", description: session?.description || "", items: copy(session?.items || []) }] };
+    if (q.get("repeat")) {
+      const source = S.sessions.find((s) => s.id === q.get("repeat"));
+      editor = source?.status === "completed" ? repeatProgram(source) : null;
+    }
   }
+  if (!editor) {
+    S.route = editorPlanned ? "home" : editorTemplate ? "admin" : "program";
+    toast(editorPlanned ? "Заплановане тренування не знайдено." : "Програму не знайдено.");
+  }
+  editorDraftKey = draftKey(S.user.uid, editorTemplate ? "template" : editorHistory ? "history" : editorPlanned ? "planned" : "program", id || q.get("repeat") || "new");
+  draftRestored = false;
+  if (editor && restore) {
+    let draft;
+    try { draft = loadDraft(localStorage, editorDraftKey); } catch {}
+    if (draft && (draft.editor.id || "") === (editor.id || "")) {
+      editor = draft.editor;
+      plannedDate = draft.plannedDate || plannedDate;
+      historyDate = draft.historyDate || historyDate;
+      historyMinutes = draft.historyMinutes ?? historyMinutes;
+      editorOpenDay = draft.editorOpenDay ?? editorOpenDay;
+      draftRestored = true;
+    }
+  }
+  if (editorPlanned && q.get("date") >= localDate()) plannedDate = q.get("date");
+}
+function persistEditorDraft(collect = false) {
+  if (!editor || !editorDraftKey || S.route !== "editor") return;
+  if (collect) { collectEditor(); return; }
+  try { draftStored = saveDraft(localStorage, editorDraftKey, { editor, plannedDate, historyDate, historyMinutes, editorOpenDay }); }
+  catch { draftStored = false; }
+  const status = document.querySelector("#draft-status");
+  if (status) status.textContent = draftMessage();
+}
+function draftMessage() {
+  return draftStored ? `${draftRestored ? "Чернетку відновлено. " : ""}Чернетка збережена на цьому пристрої.` : "Не вдалося зберегти чернетку на цьому пристрої.";
+}
+function clearEditorDraft() {
+  try { removeDraft(localStorage, editorDraftKey); } catch {}
+  editorDraftKey = "";
+  draftRestored = false;
 }
 function safeURL(value) {
   try {
@@ -391,17 +459,7 @@ function shell(content) {
       </div>
     </header>
     <main class="main">
-      <div id="offline">
-        ${
-          !navigator.onLine
-            ? `
-              <div class="error">
-                Немає мережі. Збереження буде доступне після відновлення з’єднання.
-              </div>
-            `
-            : ""
-        }
-      </div>
+      <div id="offline">${syncNotice()}</div>
       ${content}
     </main>
   `;
@@ -474,7 +532,7 @@ function render() {
   if (S.route !== currentPage) {
     const query =
       S.route === "editor"
-        ? `?${new URLSearchParams({ ...(editor?.id ? { id: editor.id } : {}), ...(editorTemplate ? { template: "1" } : {}), ...(editorHistory ? { history: "1" } : {}) })}`
+        ? `?${new URLSearchParams({ ...(editor?.id ? { id: editor.id } : {}), ...(editorTemplate ? { template: "1" } : {}), ...(editorHistory ? { history: "1" } : {}), ...(editorPlanned ? { planned: "1" } : {}) })}`
         : "";
     navigate(S.route, query);
     return;
@@ -533,7 +591,7 @@ function exerciseRows(items) {
       (i, n) => `
         <div class="exercise-row">
           <span class="number">${String(n + 1).padStart(2, "0")}</span>
-          ${exercisePhoto(i)}
+          ${i.custom ? "" : exercisePhoto(i)}
           <div class="grow">
             <h3>${esc(i.name)}</h3>
             <p>
@@ -546,18 +604,21 @@ function exerciseRows(items) {
             ${metricSummary(i.metrics)}
             ${i.setPlans ? `<details><summary class="small">Параметри підходів</summary>${i.setPlans.map((p, k) => `<p class="small">${k + 1}: ${esc(p.reps)} повторень · ${p.weight} кг${p.seconds ? ` · ${p.seconds} сек` : ""} · відпочинок ${p.rest} сек</p>`).join("")}</details>` : ""}
           </div>
-          <button
+          ${i.exerciseId ? `<button
             class="info"
             data-action="detail"
             data-id="${esc(i.exerciseId)}"
             aria-label="Як виконувати ${esc(i.name)}"
           >
             i
-          </button>
+          </button>` : ""}
         </div>
       `,
     )
     .join("");
+}
+function workoutDescription(day) {
+  return day?.description ? `<div class="notice workout-description">${esc(day.description)}</div>` : "";
 }
 function home() {
   const p = active(),
@@ -623,13 +684,14 @@ function home() {
                     >
                       <span>${dayCodes[n]}</span>
                       <b>${date.getDate()}</b>
-                      ${schedule(p, n) ? "<i></i>" : ""}
+                      ${schedule(p, n) || S.sessions.some((s) => s.status === "planned" && s.date === localDate(date)) ? "<i></i>" : ""}
                     </button>
                   `;
                 })
                 .join("")}
             </div>
           </section>
+          ${monthCalendar()}
           <section class="card">
             <div class="sectionhead">
               <h2>${d ? esc(d.name) : "Вправи за планом"}</h2>
@@ -637,12 +699,12 @@ function home() {
             </div>
             ${
               d
-                ? exerciseRows(d.items) +
-                  (d.items.length && chosenDay !== null
+                ? workoutDescription(d) + exerciseRows(d.items) +
+                  (hasWorkoutContent(d) && chosenDay !== null
                     ? btn("Почати цей день", "start", `data-day="${d.weekday}"`, "secondary")
-                    : d.items.length
+                    : hasWorkoutContent(d)
                       ? ""
-                      : empty("Додай вправи", "Відкрий програму та вибери вправи з каталогу."))
+                      : empty("Додай план", "Опиши тренування своїми словами або додай вправи в редакторі."))
                 : `
                   <p class="muted small">Додай програму, щоб побачити свій план.</p>
                 `
@@ -650,6 +712,11 @@ function home() {
           </section>
         </div>
         <div class="stack" style="align-content:start">
+          <section class="card">
+            <div class="sectionhead"><h2>Окремі тренування</h2>${btn("＋ Запланувати", "new-planned", "", "secondary")}</div>
+            <p class="muted small">Обери дату, опиши тренування своїми словами або додай вправи.</p>
+            ${plannedWorkouts()}
+          </section>
           <section class="card">
             <span class="eyebrow">Твоя послідовність</span>
             <div class="stat" style="margin:20px 0 5px">
@@ -678,6 +745,33 @@ function home() {
     `
   );
 }
+function plannedWorkouts() {
+  const list = S.sessions.filter((s) => s.status === "planned").sort((a, b) => a.date.localeCompare(b.date));
+  return list.length ? list.map((s) => `<div class="history-row">
+    <h3>${esc(s.name)}</h3><p class="small muted">${esc(s.date)} · ${s.items.length ? `${s.items.length} вправ` : "Тренування словами"}${s.date < localDate() ? " · Дата минула" : ""}</p>
+    ${workoutDescription(s)}
+    <div class="actions">${btn("Почати", "start-planned", `data-id="${esc(s.id)}"`)}${btn("Редагувати", "edit-planned", `data-id="${esc(s.id)}"`, "secondary")}${btn("Перенести", "reschedule", `data-id="${esc(s.id)}"`, "secondary")}${btn("Скасувати", "delete-planned", `data-id="${esc(s.id)}"`, "ghost")}</div>
+    </div>`).join("") : '<p class="muted small">Окремих тренувань ще не заплановано.</p>';
+}
+function monthCalendar() {
+  const { offset, dates } = monthDays(S.calendarMonth);
+  const title = new Date(`${S.calendarMonth}-01T12:00:00`).toLocaleDateString("uk", { month: "long", year: "numeric" });
+  const selected = calendarEvents(active(), S.sessions, S.calendarDate);
+  const labels = { program: "Програма", planned: "Заплановано", active: "Триває", completed: "Завершено" };
+  return `<section class="card month-calendar">
+    <div class="sectionhead"><h2>Календар</h2><div class="actions">${btn("‹", "calendar-month", 'data-step="-1" aria-label="Попередній місяць"', "ghost")}${btn("Сьогодні", "calendar-today", "", "ghost")}${btn("›", "calendar-month", 'data-step="1" aria-label="Наступний місяць"', "ghost")}</div></div>
+    <p class="calendar-title">${esc(title)}</p>
+    <div class="month-grid">${dayCodes.map((d) => `<span class="small muted">${d}</span>`).join("")}${Array.from({ length: offset }, () => '<span></span>').join("")}${dates.map((date) => {
+      const events = calendarEvents(active(), S.sessions, date);
+      return `<button class="month-day ${date === localDate() ? "today" : ""} ${date === S.calendarDate ? "selected" : ""}" data-action="calendar-date" data-id="${date}" aria-pressed="${date === S.calendarDate}" aria-label="${date}${events.length ? `, ${events.map((e) => labels[e.kind]).join(", ")}` : ", немає тренувань"}"><b>${+date.slice(-2)}</b><span class="calendar-dots">${[...new Set(events.map((e) => e.kind))].map((kind) => `<i class="event-${kind}"></i>`).join("")}</span></button>`;
+    }).join("")}</div>
+    <p class="small muted">● Програма · <span class="calendar-planned">● Заплановано</span> · <span class="calendar-completed">● Завершено</span></p>
+    <h3>${esc(S.calendarDate)}</h3>
+    ${selected.length ? selected.map((e) => `<div class="calendar-entry"><b>${esc(e.name)}</b><span class="small muted">${labels[e.kind]}</span><div class="actions">${e.kind === "planned" ? btn("Редагувати", "edit-planned", `data-id="${esc(e.id)}"`, "secondary") + btn("Перенести", "reschedule", `data-id="${esc(e.id)}"`, "ghost") : e.kind === "completed" ? btn("Деталі", "history", `data-id="${esc(e.id)}"`, "ghost") : e.kind === "active" ? btn("Продовжити", "resume", "", "secondary") : btn("Почати день програми", "start", `data-program="${esc(e.programId)}" data-day="${e.weekday}"`, "ghost")}</div></div>`).join("") : '<p class="muted small">На цю дату тренувань немає.</p>'}
+    ${S.calendarDate >= localDate() ? btn("＋ Запланувати на цю дату", "new-planned", `data-date="${S.calendarDate}"`, "secondary") : ""}
+    <p class="small muted">Календар показує тижневий розклад активної програми. Початок тренування записує сьогоднішню дату.</p>
+  </section>`;
+}
 function history(list) {
   return list.length
     ? list
@@ -694,6 +788,8 @@ function history(list) {
                 </div>
                 <button class="mini-btn" data-action="history" data-id="${s.id}">Деталі</button>
               </div>
+              ${btn("Повторити тренування", "repeat-history", `data-id="${esc(s.id)}"`, "ghost")}
+              ${btn("Виправити", "edit-history", `data-id="${esc(s.id)}"`, "ghost")}
             </div>
           `,
         )
@@ -741,7 +837,7 @@ function programs() {
                         (d) => `
                           <details class="program-day" name="program-days">
                             <summary><span class="number">${dayCodes[d.weekday]}</span><span class="grow"><strong>${esc(d.name)}</strong><span class="small muted">${esc(d.groups)} · ${d.items.length} вправ</span></span><span class="day-chevron" aria-hidden="true">⌄</span></summary>
-                            <div class="program-day-content">${exerciseRows(d.items) || '<p class="muted">Вправ ще немає.</p>'}
+                            <div class="program-day-content">${workoutDescription(d)}${exerciseRows(d.items) || (d.description ? "" : '<p class="muted">Плану ще немає.</p>')}
                             ${btn(
                               "Почати",
                               "start",
@@ -852,22 +948,8 @@ function catalog() {
     `
   );
 }
-function matchesExercise(e, query) {
-  const normalize = (value) => String(value ?? "").toLocaleLowerCase("uk").replace(/[’'`ʼ]/g, "").replace(/\s+/g, " ").trim();
-  const text = normalize(`${e.name ?? ""} ${e.equipment ?? ""} ${e.primary ?? ""} ${e.secondary ?? ""}`);
-  return normalize(query).split(" ").filter(Boolean).every((word) => text.includes(word));
-}
 function catalogResults() {
-  const list = S.exercises.filter(
-    (e) =>
-      !e.archived &&
-      (!S.favoritesOnly || S.exercisePreferences[e.id]?.favorite) &&
-      (S.catalogScope === "all" || (S.catalogScope === "personal" ? e.personal : !e.personal)) &&
-      (S.filter === "Усі" || e.primary === S.filter) &&
-      (!S.equipment || e.equipment === S.equipment) &&
-      (!S.withPhoto || !!safeURL(e.image)) &&
-      matchesExercise(e, S.query),
-  ).sort((a, b) => (S.catalogSort === "group" ? String(a.primary || "").localeCompare(String(b.primary || ""), "uk") : 0) || String(a.name || "").localeCompare(String(b.name || ""), "uk"));
+  const list = filterExercises(S.exercises, S, S.exercisePreferences, (e) => !!safeURL(e.image));
   return `<p class="small muted" role="status" aria-live="polite" aria-atomic="true">Знайдено вправ: ${list.length}</p>` + (list.length
     ? `
         <div class="catalog">
@@ -1014,49 +1096,52 @@ function setPlanEditor(item, n, j) {
     </div></fieldset>`).join("") : ""}</div>`;
 }
 function openImport() {
-  openModal(`<div class="sectionhead"><h2>Імпорт JSON від ШІ</h2>${btn("Закрити", "close", "", "ghost")}</div>
-    <p class="muted">Попроси ШІ повернути JSON за цим прикладом. Можна додавати лише exercises або лише programTemplates. Імпорт створює нові записи.</p>
-    <details><summary>Приклад формату для ШІ</summary><pre class="json-preview">${esc(JSON.stringify(importExample, null, 2))}</pre></details>
+  openModal(`<div class="sectionhead"><h2>Імпорт JSON</h2>${btn("Закрити", "close", "", "ghost")}</div>
+    <p class="muted">Встав JSON за наведеним прикладом. Можна імпортувати вправи, шаблони програм або обидва типи записів. Імпорт створює нові записи.</p>
+    <details><summary>Приклад формату JSON</summary><pre class="json-preview">${esc(JSON.stringify(importExample, null, 2))}</pre></details>
     <form id="import-form"><label>JSON<textarea name="json" rows="16" required maxlength="700000" spellcheck="false">${esc(importDraft ? JSON.stringify(importDraft, null, 2) : "")}</textarea></label>
     <button class="btn" type="submit">Перевірити та переглянути</button><div class="form-error" role="alert"></div></form>`);
 }
 
 function programEditor() {
+  persistEditorDraft();
   return (
     heading(
-      editorHistory ? "Запис минулого тренування" : editorTemplate ? "Шаблон програми" : "Редактор програми",
+      editorPlanned ? "Планування окремого тренування" : editorHistory ? "Запис минулого тренування" : editorTemplate ? "Шаблон програми" : "Редактор програми",
       "Дні, вправи та навантаження — під твої цілі.",
     ) +
     `
       <form id="program-form" class="card program-builder">
-        <div class="builder-intro"><span class="eyebrow">Твій план</span><h2>${editorHistory ? "Запиши результат" : "Побудуй свій тиждень"}</h2><p class="muted">Назви програму, обери дні та додай вправи з потрібним навантаженням.</p></div>
+        <div class="row wrap"><p id="draft-status" class="small muted" role="status">${draftMessage()}</p>${btn("Скинути чернетку", "reset-draft", 'type="button"', "ghost")}</div>
+        <div class="builder-intro"><span class="eyebrow">Твій план</span><h2>${editorPlanned ? "Заплануй тренування" : editorHistory ? "Запиши результат" : "Побудуй свій тиждень"}</h2><p class="muted">${editorPlanned ? "Обери дату й назву. Опиши тренування своїми словами або додай вправи з потрібним навантаженням." : "Назви програму, обери дні та опиши тренування або додай вправи з потрібним навантаженням."}</p></div>
         <div class="editor-overview"><span><b>${editor.days.length}</b> днів</span><span><b>${editor.days.reduce((sum, d) => sum + d.items.length, 0)}</b> вправ</span></div>
         ${editorHistory ? `<p class="muted">Обери дату, додай вправи та вкажи фактичні повторення й вагу. Для різних підходів натисни «Налаштувати кожен підхід».</p><div class="formgrid">${field("Дата тренування", "history-date", historyDate, "date", 'required max="' + localDate() + '"')}${field("Тривалість, хв", "history-minutes", historyMinutes, "number", 'required min="0" max="1440"')}</div>` : ""}
+        ${editorPlanned ? field("Дата тренування", "planned-date", plannedDate, "date", 'required min="' + localDate() + '"') : ""}
         <div class="formgrid">
           ${field("Назва", "name", editor.name, "text", 'required maxlength="100"')}
-          <label>
+          <label ${editorPlanned ? "hidden" : ""}>
             Тип програми
             <select name="type">
               ${options(types, editor.type)}
             </select>
           </label>
         </div>
-        <nav class="builder-days" aria-label="Дні програми">${editor.days.map((d, n) => `<button type="button" data-action="open-editor-day" data-n="${n}">${esc(dayCodes[d.weekday] || "День")} · ${esc(d.name || `День ${n + 1}`)}</button>`).join("")}</nav>
+        <nav class="builder-days" aria-label="Дні програми" ${editorPlanned ? "hidden" : ""}>${editor.days.map((d, n) => `<button type="button" data-action="open-editor-day" data-n="${n}">${esc(dayCodes[d.weekday] || "День")} · ${esc(d.name || `День ${n + 1}`)}</button>`).join("")}</nav>
         <div id="days-editor">
           ${editor.days
             .map(
               (d, n) => `
                 <details class="day-editor" name="editor-days" id="builder-day-${n}" data-editor-day="${n}" ${editorOpenDay === n ? "open" : ""}>
-                  <summary><span class="number">${esc(dayCodes[d.weekday] || "День")}</span><span class="grow"><strong>${esc(d.name || `День ${n + 1}`)}</strong><span class="small muted">День ${n + 1} · ${d.items.length} вправ</span></span><span class="day-chevron" aria-hidden="true">⌄</span></summary>
+                  <summary><span class="number">${editorPlanned ? "1" : esc(dayCodes[d.weekday] || "День")}</span><span class="grow"><strong>${esc(editorPlanned ? editor.name : d.name || `День ${n + 1}`)}</strong><span class="small muted">${editorPlanned ? "Тренування" : `День ${n + 1}`} · ${d.items.length} вправ</span></span><span class="day-chevron" aria-hidden="true">⌄</span></summary>
                   <div class="editor-day-content">
                   <div class="sectionhead">
-                    <div><span class="eyebrow">${d.items.length} вправ</span><h2>День ${n + 1}</h2></div>
-                    <button type="button" class="mini-btn" data-action="remove-day" data-n="${n}" ${editorHistory ? "disabled" : ""}>
+                    <div><span class="eyebrow">${d.items.length} вправ</span><h2>${editorPlanned ? "Вправи тренування" : `День ${n + 1}`}</h2></div>
+                    <button type="button" class="mini-btn" data-action="remove-day" data-n="${n}" ${editorPlanned ? "hidden" : ""} ${editorHistory || editorPlanned ? "disabled" : ""}>
                       Прибрати день
                     </button>
                   </div>
-                  <div class="formgrid">
-                    <label>
+                  <div class="formgrid" ${editorPlanned ? "hidden" : ""}>
+                    <label ${editorPlanned ? "hidden" : ""}>
                       День тижня
                       <select name="day-${n}">
                         ${days
@@ -1078,6 +1163,9 @@ function programEditor() {
                       'required maxlength="100"',
                     )}
                   </div>
+                  <label>Тренування своїми словами <span class="small muted">Необов’язково вибирати вправи з каталогу. Можна залишити лише опис.</span>
+                    <textarea name="description-${n}" rows="4" maxlength="4000" placeholder="Наприклад: 30 хв прогулянки, розтяжка та легка розминка">${esc(d.description || "")}</textarea>
+                  </label>
                   ${field(
                     "М’язові групи",
                     `groups-${n}`,
@@ -1089,7 +1177,7 @@ function programEditor() {
                       (i, j) => `
                         <div class="item-editor">
                           <div class="row wrap">
-                            <div class="exercise-heading">${exercisePhoto(i)}<b>${j + 1}. ${esc(i.name)}</b></div>
+                            <div class="exercise-heading">${i.custom ? "" : exercisePhoto(i)}<b>${j + 1}. ${esc(i.name)}</b>${i.custom ? '<span class="badge">Своїми словами</span>' : ""}</div>
                             <div class="actions">
                               <button
                                 type="button"
@@ -1126,6 +1214,7 @@ function programEditor() {
                               </button>
                             </div>
                           </div>
+                          ${i.custom ? field("Назва вправи своїми словами", `customname-${n}-${j}`, i.name, "text", 'required maxlength="100"') : ""}
                           <div class="formgrid four">
                             ${field(
                               "Підходи",
@@ -1174,7 +1263,12 @@ function programEditor() {
                       `,
                     )
                     .join("")}
-                  <div class="builder-picker"><h3>＋ Додати вправу</h3><p class="small muted">Знайди вправу Global або зі своєї бібліотеки.</p>
+                  <div class="builder-picker"><h3>＋ Додати вправу</h3>
+                  <label>Вправа своїми словами
+                    <input type="text" id="custom-exercise-${n}" maxlength="100" data-custom-exercise="${n}" placeholder="Наприклад: присідання з рюкзаком" />
+                  </label>
+                  ${btn("＋ Додати свою вправу", "add-custom-item", `type="button" data-n="${n}"`, "secondary")}
+                  <p class="small muted">Впиши назву, потім налаштуй підходи та навантаження. Або обери вправу з каталогу нижче.</p>
                   <div class="formgrid picker-tools">
                     <label>Знайти вправу
                       <input type="search" id="picker-search-${n}" data-picker-search="${n}" placeholder="Назва, тренажер або м’язи…" />
@@ -1222,11 +1316,12 @@ function programEditor() {
             type="button"
             class="btn ghost"
             data-action="add-day"
-            ${editorHistory || editor.days.length >= 7 ? "disabled" : ""}
+            ${editorPlanned ? "hidden" : ""}
+            ${editorHistory || editorPlanned || editor.days.length >= 7 ? "disabled" : ""}
           >
             ＋ Додати день
           </button>
-          <button class="btn" type="submit">${editorHistory ? "Зберегти в історію" : "Зберегти програму"}</button>
+          <button class="btn" type="submit">${editorPlanned ? "Зберегти тренування" : editorHistory ? "Зберегти в історію" : "Зберегти програму"}</button>
           <button type="button" class="btn ghost" data-action="cancel-editor">Скасувати</button>
         </div>
         <div class="form-error" role="alert"></div>
@@ -1239,13 +1334,16 @@ function collectEditor() {
   if (!f) return;
   const v = new FormData(f);
   if (editorHistory) { historyDate = v.get("history-date"); historyMinutes = +v.get("history-minutes"); }
+  if (editorPlanned) plannedDate = v.get("planned-date");
   editor.name = v.get("name");
   editor.type = v.get("type");
   editor.days.forEach((d, n) => {
     d.weekday = +v.get(`day-${n}`);
     d.name = v.get(`dayname-${n}`);
     d.groups = v.get(`groups-${n}`);
+    d.description = String(v.get(`description-${n}`) || "");
     d.items.forEach((i, j) => {
+      if (i.custom) i.name = String(v.get(`customname-${n}-${j}`) || "").trim();
       for (const k of ["sets", "reps", "seconds", "weight", "rest", "note"])
         i[k] = ["reps", "note"].includes(k) ? v.get(`${k}-${n}-${j}`) : +v.get(`${k}-${n}-${j}`);
       if (i.setPlans) {
@@ -1266,6 +1364,87 @@ function collectEditor() {
       }));
     });
   });
+  persistEditorDraft();
+}
+function previousWorkout(item, session) {
+  const previous = previousResults(S.sessions, item, session.id);
+  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k) => `<p class="small">Підхід ${k + 1}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
+}
+function progressView() {
+  const items = new Map();
+  S.sessions.filter((s) => s.status === "completed").forEach((s) => s.items.forEach((i, index) => {
+    if (s.logs.some((l) => l.index === index)) items.set(exerciseKey(i), i.name);
+  }));
+  if (!items.has(S.progressExercise)) S.progressExercise = items.keys().next().value || "";
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - +S.progressPeriod);
+  const points = progressSeries(S.sessions, { metric: S.progressMetric, key: S.progressExercise,
+    since: S.progressPeriod === "all" ? "" : localDate(sinceDate) });
+  const units = { weight: "кг", volume: "кг × повторення", frequency: "тренувань" };
+  return `<section class="card progress-section"><h2>Прогрес</h2>
+    <div class="formgrid"><label>Показник<select id="progress-metric">${[["weight", "Найбільша виконана вага"], ["volume", "Обсяг вправи"], ["frequency", "Тренування за місяць"]].map(([v, label]) => `<option value="${v}" ${S.progressMetric === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label>Період<select id="progress-period">${[["30", "30 днів"], ["90", "90 днів"], ["365", "Рік"], ["all", "Увесь час"]].map(([v, label]) => `<option value="${v}" ${S.progressPeriod === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    ${S.progressMetric !== "frequency" ? `<label>Вправа<select id="progress-exercise">${items.size ? [...items].sort((a, b) => a[1].localeCompare(b[1], "uk")).map(([key, name]) => `<option value="${esc(key)}" ${S.progressExercise === key ? "selected" : ""}>${esc(name)}</option>`).join("") : '<option value="">Ще немає результатів</option>'}</select></label>` : ""}</div>
+    <p class="small muted">${S.progressMetric === "volume" ? "Сума ваги × повторень у виконаних підходах за день." : S.progressMetric === "frequency" ? "Кількість завершених тренувань за місяць у вибраному періоді." : "Найбільша вага у виконаному підході за день."}</p>
+    ${points.length ? progressChart(points, units[S.progressMetric]) : '<p class="muted">Немає результатів за вибраний період.</p>'}
+  </section>`;
+}
+function progressChart(points, unit) {
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const x = (k) => points.length === 1 ? 330 : 60 + k * 540 / (points.length - 1);
+  const y = (value) => 190 - value / max * 150;
+  return `<svg class="progress-chart" viewBox="0 0 660 240" role="img" aria-label="Графік прогресу, ${esc(unit)}">
+    ${[0, 0.5, 1].map((fraction) => `<line x1="60" x2="600" y1="${y(max * fraction)}" y2="${y(max * fraction)}" class="chart-grid"/><text x="52" y="${y(max * fraction) + 4}" text-anchor="end">${Math.round(max * fraction * 10) / 10}</text>`).join("")}
+    <polyline class="chart-line" points="${points.map((p, k) => `${x(k)},${y(p.value)}`).join(" ")}"/>
+    ${points.map((p, k) => `<circle cx="${x(k)}" cy="${y(p.value)}" r="4" class="chart-point"><title>${esc(p.date)}: ${p.value} ${esc(unit)}</title></circle>`).join("")}
+    <text x="60" y="220">${esc(points[0].date)}</text>${points.length > 1 ? `<text x="600" y="220" text-anchor="end">${esc(points.at(-1).date)}</text>` : ""}
+    </svg><details><summary>Дані графіка · ${esc(unit)}</summary><div class="chart-data"><table><thead><tr><th>Дата</th><th>Значення</th></tr></thead><tbody>${points.map((p) => `<tr><td>${esc(p.date)}</td><td>${Math.round(p.value * 100) / 100}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
+function downloadExport(format) {
+  const blob = new Blob([format === "csv" ? exportCsv(S) : JSON.stringify(exportData(S), null, 2)],
+    { type: format === "csv" ? "text/csv;charset=utf-8" : "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob), link = document.createElement("a");
+  link.href = url;
+  link.download = `nexus-gymb-${localDate()}.${format}`;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function syncNotice() {
+  const pending = db?.pending?.() || 0;
+  return (!navigator.onLine || pending || S.syncError) ? `<div class="notice" role="status">${S.syncError ? esc(S.syncError) : !navigator.onLine ? "Немає мережі. Особисті зміни зберігаються на пристрої." : "Синхронізація…"}${pending ? ` Очікують відправлення: ${pending}.` : ""}${navigator.onLine && pending ? btn("Синхронізувати", "sync-now", "", "ghost") : ""}</div>` : "";
+}
+function updateSyncNotice() { const box = document.querySelector("#offline"); if (box) box.innerHTML = syncNotice(); }
+function soundControls() {
+  return `<div class="timer-settings"><label class="photo-toggle"><input type="checkbox" id="timer-sound" ${S.timerSound ? "checked" : ""} /> Звук завершення таймера</label><label class="photo-toggle"><input type="checkbox" id="timer-vibration" ${S.timerVibration ? "checked" : ""} /> Вібрація</label></div>`;
+}
+function checkTimerNotifications() {
+  const ended = expiredTimers(ongoing(), notifiedTimers);
+  if (!ended.length) return;
+  toast(ended.includes("restEnd") ? "Відпочинок завершено" : "Час вправи завершено");
+  if (S.timerSound) timerSound.play();
+  if (S.timerVibration) navigator.vibrate?.([150, 80, 150]);
+}
+function historyTools() {
+  const f = S.historyFilters, items = new Map();
+  S.sessions.filter((s) => s.status === "completed").forEach((s) => s.items.forEach((i) => items.set(i.exerciseId || `name:${i.name.toLocaleLowerCase("uk").replace(/[’'ʼ]/g, '').trim()}`, i.name)));
+  return `<div class="formgrid history-tools"><label>Пошук<input id="history-search" type="search" value="${esc(f.query)}" placeholder="Назва тренування або вправи" /></label><label>Вправа<select data-history-filter="exercise"><option value="">Усі вправи</option>${[...items].map(([id, name]) => `<option value="${esc(id)}" ${id === f.exercise ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>Від<input type="date" data-history-filter="from" value="${esc(f.from)}" /></label><label>До<input type="date" data-history-filter="to" value="${esc(f.to)}" /></label></div>${btn("Скинути фільтри", "reset-history-filters", "", "ghost")}`;
+}
+function filteredHistory() {
+  const list = filterHistory(S.sessions, S.historyFilters);
+  return `<p class="small muted" role="status">Знайдено тренувань: ${list.length}</p>${list.length ? history(list) : '<p class="muted">Немає тренувань за вибраними умовами.</p>'}`;
+}
+function historyEditForm(s) {
+  if (s?.status !== "completed") throw Error("Завершене тренування не знайдено.");
+  openModal(`<h2>Виправити тренування</h2><form id="history-edit-form" data-id="${esc(s.id)}">
+    ${field("Назва", "name", s.name, "text", 'required maxlength="100"')}
+    <div class="formgrid">${field("Дата", "date", s.date, "date", `required max="${localDate()}"`)}${field("Тривалість, хв", "minutes", Math.round((s.endedAt - s.startedAt) / 60000), "number", 'required min="0" max="1440"')}</div>
+    <label>Опис<textarea name="description" rows="3" maxlength="4000">${esc(s.description || "")}</textarea></label>
+    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · підхід ${s.logs.slice(0, k + 1).filter((v) => v.index === l.index).length}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага, кг", `log-weight-${k}`, l.weight, "number", 'required min="0" max="1000" step="0.5"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
+    <div class="actions"><button type="submit" class="btn">Зберегти виправлення</button>${btn("Скасувати", "close", 'type="button"', "ghost")}</div><div class="form-error" role="alert"></div></form>`);
+}
+function restorePreview() {
+  const { entries, skipped } = backupEntries(restoreDraft, S, S.user.uid);
+  openModal(`<h2>Відновити резервну копію</h2><p>Програм: ${restoreDraft.programs.length}, тренувань: ${restoreDraft.sessions.length}, особистих вправ: ${restoreDraft.exercises.length}.</p><p>Буде додано записів: ${entries.length}. Пропущено наявних записів або активних тренувань: ${skipped.length}.</p><p class="muted">Поточні дані залишаються. Записи з однаковими ID пропускаються.</p><div class="actions">${btn("Відновити", "confirm-restore", entries.length ? "" : "disabled")}${btn("Скасувати", "close", "", "ghost")}</div>`);
 }
 function profile() {
   return (
@@ -1288,13 +1467,13 @@ function profile() {
             <strong>#${esc(S.profile?.customId || "…")}</strong>
           </div>
         </section>
+        <div id="progress-view">${progressView()}</div>
+        <section class="card"><h2>Сповіщення таймера</h2>${soundControls()}<p class="small muted">Налаштування зберігаються на цьому пристрої. Сповіщення працюють, поки сайт відкритий; вібрація залежить від браузера.</p></section>
+        <section class="card"><h2>Експорт даних</h2><p class="muted small">JSON містить програми, всі тренування, особисті вправи та їхні налаштування. CSV містить плани програм, заплановані тренування й виконані підходи.</p><div class="actions">${btn("Завантажити JSON", "export-json", "", "secondary")}${btn("Завантажити CSV", "export-csv", "", "secondary")}</div></section>
+        <section class="card"><h2>Відновлення з JSON</h2><p class="muted small">Обери резервну копію, яку завантажив із профілю. Перед збереженням буде показано кількість записів.</p><form id="restore-form"><label>Резервна копія JSON<input type="file" id="restore-file" accept=".json,application/json" required /></label><button class="btn secondary" type="submit">Перевірити копію</button><div class="form-error" role="alert"></div></form></section>
         <section class="card">
           <h2>Історія тренувань</h2>
-          ${history(
-            S.sessions
-              .filter((s) => s.status === "completed")
-              .sort((a, b) => b.startedAt - a.startedAt),
-          )}
+          ${historyTools()}<div id="history-results">${filteredHistory()}</div>
         </section>
       </div>
     `
@@ -1308,6 +1487,7 @@ function sessionView() {
       "Результат уже в історії.",
       btn("На головну", "route", 'data-id="home"'),
     );
+  if (!s.items.length) return `<div class="session">${heading(s.name, "Тренування словами", btn("Згорнути", "route", 'data-id="home"', "ghost"))}<section class="card">${workoutDescription(s)}<p class="small muted">Після виконання збережи тренування в історію.</p>${btn("✓ Завершити тренування", "finish-text", "", "wide")}</section></div>`;
   const i = s.items[s.index],
     count = s.logs.filter((l) => l.index === s.index).length,
     plan = setPlan(i, Math.min(count, i.sets - 1));
@@ -1319,10 +1499,12 @@ function sessionView() {
         btn("Згорнути", "route", 'data-id="home"', "ghost"),
       )}
       <div class="progress"><div style="width:${(s.index / s.items.length) * 100}%"></div></div>
+      ${soundControls()}
+      ${workoutDescription(s)}
       <section class="card">
         <span class="badge">${esc(i.primary || "Тренування")}</span>
         <h2 class="workout-title" style="margin-top:20px">${esc(i.name)}</h2>
-        ${exercisePhoto(i, "large")}
+        ${i.custom ? '<span class="badge">Вправа своїми словами</span>' : exercisePhoto(i, "large")}
         <p class="muted">
           ${i.sets} підходи ·
           ${plan.seconds ? `${plan.seconds} сек` : esc(plan.reps) + " повторень"}${
@@ -1335,12 +1517,12 @@ function sessionView() {
               <div class="notice">${esc(i.note)}</div>
             `
             : ""
-        }${btn(
+        }${i.exerciseId ? btn(
           "Як виконувати",
           "detail",
           `data-id="${esc(i.exerciseId)}" data-session="1"`,
           "secondary",
-        )}
+        ) : ""}
         <div class="setdots">
           ${Array.from(
             { length: i.sets },
@@ -1349,6 +1531,7 @@ function sessionView() {
             `,
           ).join("")}
         </div>
+        ${previousWorkout(i, s)}
         ${
           plan.seconds
             ? `
@@ -1416,6 +1599,7 @@ function sessionView() {
           "next",
           count < i.sets ? "disabled" : "",
         )}${btn("Пропустити вправу", "skip", "", "ghost")}
+        ${s.logs.length ? btn("Скасувати останній підхід", "undo-set", "", "secondary") : ""}
       </div>
     </div>
   `;
@@ -1455,18 +1639,40 @@ async function adminUser(id) {
   if (!user) throw Error("Користувача не знайдено.");
   const [programs, sessions] = await Promise.all([db.list(`users/${id}/programs`), db.list(`users/${id}/sessions`)]);
   const completed = sessions.filter((s) => s.status === "completed");
-  const latest = [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const latest = sessions.filter((s) => s.status !== "planned").sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
   openModal(`<div class="sectionhead"><div><span class="eyebrow">Користувач · ID ${esc(user.customId || "—")}</span><h2>${esc(user.name || "Без імені")}</h2></div>${btn("Закрити", "close", "", "ghost")}</div>
     <dl class="user-facts"><div><dt>Email</dt><dd>${esc(user.email || "—")}</dd></div><div><dt>Реєстрація</dt><dd>${displayDate(user.registeredAt || user.createdAt)}</dd></div>
     <div><dt>Останній вхід</dt><dd>${displayDate(user.lastLoginTime || user.lastLogin)}</dd></div><div><dt>Останнє тренування</dt><dd>${esc(latest?.date || "Ще немає")}</dd></div></dl>
     <div class="editor-overview"><span><b>${programs.length}</b> програм</span><span><b>${completed.length}</b> завершених тренувань</span><span><b>${sessions.filter((s) => s.status === "active").length}</b> активних</span></div>
     <h3>Програми користувача</h3>
     ${programs.length ? programs.map((p) => `<details class="user-program" open><summary>${esc(p.name)} ${p.id === user.activeProgramId ? '· Активна' : ''}</summary>
-      <p class="small muted">${esc(p.type)}</p>${(p.days || []).map((d) => `<section class="admin-plan-day"><h3>${esc(days[d.weekday])} · ${esc(d.name)}</h3><p>${esc(d.groups)}</p>${d.items.map(adminItemDetails).join("") || '<p class="muted">Вправ ще немає.</p>'}</section>`).join("")}</details>`).join("") : '<p class="muted">Програм ще немає.</p>'}
-    <h3>Історія та поточні тренування</h3>
-    ${sessions.length ? [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) => `<details class="user-program"><summary>${esc(s.date)} · ${esc(s.name)} · ${s.status === "completed" ? "Завершено" : "Триває"}</summary>
+      <p class="small muted">${esc(p.type)}</p>${(p.days || []).map((d) => `<section class="admin-plan-day"><h3>${esc(days[d.weekday])} · ${esc(d.name)}</h3><p>${esc(d.groups)}</p>${workoutDescription(d)}${d.items.map(adminItemDetails).join("") || (d.description ? "" : '<p class="muted">Плану ще немає.</p>')}</section>`).join("")}</details>`).join("") : '<p class="muted">Програм ще немає.</p>'}
+    <h3>Заплановані, поточні та завершені тренування</h3>
+    ${sessions.length ? [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) => `<details class="user-program"><summary>${esc(s.date)} · ${esc(s.name)} · ${s.status === "planned" ? "Заплановано" : s.status === "completed" ? "Завершено" : "Триває"}</summary>
       <p class="small muted">${s.logs?.length || 0} підходів${s.endedAt ? ` · ${Math.max(0, Math.round((s.endedAt - s.startedAt) / 60000))} хв` : ""}</p>
+      ${workoutDescription(s)}
       ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k) => `<p>Виконано ${k + 1}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}`, "", "admin-user-dialog");
+}
+function adminCatalogControls() {
+  const f = S.adminCatalog;
+  const equipment = [...new Set(S.exercises.filter((e) => !e.personal).map((e) => e.equipment).filter(Boolean))].sort((a, b) => a.localeCompare(b, "uk"));
+  return `<input id="admin-catalog-search" type="search" aria-label="Пошук у наповненні каталогу" placeholder="Пошук вправи або тренажера…" value="${esc(f.query)}" />
+    <div class="filters" role="group" aria-label="М’язові групи">${["Усі", ...groups].map((g) => `<button type="button" class="chip ${f.filter === g ? "active" : ""}" data-action="admin-catalog-filter" data-id="${esc(g)}" aria-pressed="${f.filter === g}">${esc(g)}</button>`).join("")}</div>
+    <div class="catalog-tools">
+      <label>Обладнання<select data-admin-catalog="equipment"><option value="">Усе обладнання</option>${equipment.map((e) => `<option value="${esc(e)}" ${f.equipment === e ? "selected" : ""}>${esc(e)}</option>`).join("")}</select></label>
+      <label>Сортування<select data-admin-catalog="catalogSort"><option value="name" ${f.catalogSort === "name" ? "selected" : ""}>За назвою · А–Я</option><option value="group" ${f.catalogSort === "group" ? "selected" : ""}>За м’язовою групою</option></select></label>
+      <label>Статус<select data-admin-catalog="archive"><option value="all" ${f.archive === "all" ? "selected" : ""}>Усі записи</option><option value="active" ${f.archive === "active" ? "selected" : ""}>Активні</option><option value="archived" ${f.archive === "archived" ? "selected" : ""}>В архіві</option></select></label>
+      <label class="photo-toggle"><input type="checkbox" data-admin-catalog="withPhoto" ${f.withPhoto ? "checked" : ""} /> Лише з фото</label>
+      <label class="photo-toggle"><input type="checkbox" data-admin-catalog="favoritesOnly" ${f.favoritesOnly ? "checked" : ""} /> ♥ Улюблені</label>
+      ${btn("Скинути фільтри", "reset-admin-catalog", "", "ghost")}
+    </div>`;
+}
+function adminCatalogResults() {
+  const list = filterExercises(S.exercises, S.adminCatalog, S.exercisePreferences, (e) => !!safeURL(e.image));
+  return `<p class="small muted" role="status" aria-live="polite" aria-atomic="true">Знайдено вправ: ${list.length}</p>` +
+    (list.length ? list.map((e) => `<div class="exercise-row admin-record-row">
+      ${exercisePhoto(e)}<div class="grow"><h3>${esc(e.name)}</h3><p>${esc(e.primary)} · ${esc(e.equipment)}${e.archived ? " · В архіві" : ""}</p></div>
+      ${adminRecordActions(e, "exercise")}</div>`).join("") : '<p class="muted">Вправ не знайдено. Спробуй змінити або скинути фільтри.</p>');
 }
 function admin() {
   if (!owner()) return empty("Немає доступу", "Цей розділ доступний лише власнику.");
@@ -1481,25 +1687,13 @@ function admin() {
           <div id="admin-users-list">${S.adminUsers.length ? adminUsersList() : '<p class="muted">Завантаж список, щоб переглянути користувачів.</p>'}</div>
         </section>
         <section class="card">
-          <h2>Наповнення каталогу</h2>${btn("Імпорт JSON від ШІ", "open-import", "", "secondary")}
-          <p class="muted">Додавай власні вправи вручну або імпортуй JSON від ШІ.</p>
+          <h2>Наповнення каталогу</h2>${btn("Імпорт JSON", "open-import", "", "secondary")}
+          <p class="muted">Додавай власні вправи вручну або імпортуй їх у форматі JSON.</p>
           <div class="actions">
             ${btn("＋ Додати вправу", "new-exercise")}
           </div>
-          ${S.exercises.filter((e) => !e.personal)
-            .map(
-              (e) => `
-                <div class="exercise-row admin-record-row">
-                  ${exercisePhoto(e)}
-                  <div class="grow">
-                    <h3>${esc(e.name)}</h3>
-                    <p>${esc(e.primary)}${e.archived ? " · В архіві" : ""}</p>
-                  </div>
-                  ${adminRecordActions(e, "exercise")}
-                </div>
-              `,
-            )
-            .join("")}
+          ${adminCatalogControls()}
+          <div id="admin-catalog-results">${adminCatalogResults()}</div>
         </section>
         <section class="card">
           <div class="sectionhead">
@@ -1879,7 +2073,10 @@ async function action(a, b) {
       break;
 
     case "route":
-      if (S.route === "editor" && !confirm("Вийти з редактора без збереження?")) return;
+      if (S.route === "editor") {
+        persistEditorDraft(true);
+        if (!confirm(draftStored ? "Вийти з редактора? Чернетка залишиться на цьому пристрої." : "Вийти з редактора без збереження?")) return;
+      }
       S.route = id;
       chosenDay = null;
       render();
@@ -1889,6 +2086,49 @@ async function action(a, b) {
       chosenDay = +b.dataset.day;
       render();
       break;
+    case "calendar-month": {
+      const date = new Date(`${S.calendarMonth}-01T12:00:00`);
+      date.setMonth(date.getMonth() + +b.dataset.step);
+      S.calendarMonth = localDate(date).slice(0, 7);
+      S.calendarDate = `${S.calendarMonth}-01`;
+      render();
+      break;
+    }
+    case "calendar-today":
+      S.calendarMonth = localDate().slice(0, 7); S.calendarDate = localDate(); render();
+      break;
+    case "calendar-date":
+      S.calendarDate = id; render();
+      break;
+    case "export-json": downloadExport("json"); break;
+    case "export-csv": downloadExport("csv"); break;
+    case "edit-history":
+      historyEditForm(S.sessions.find((s) => s.id === id));
+      break;
+    case "undo-set":
+      await saveSession(undoLastSet(ongoing()));
+      toast("Останній підхід скасовано");
+      break;
+    case "reset-history-filters":
+      Object.assign(S.historyFilters, { query: "", from: "", to: "", exercise: "" }); render();
+      break;
+    case "sync-now":
+      await db.sync(); S.syncError = ""; updateSyncNotice();
+      break;
+    case "confirm-restore": {
+      if (!restoreDraft) throw Error("Обери резервну копію.");
+      const { entries } = backupEntries(restoreDraft, S, S.user.uid);
+      try {
+        for (let k = 0; k < entries.length; k += 100) await db.saveMany(entries.slice(k, k + 100));
+      } catch (error) { await refresh().catch(() => {}); throw error; }
+      await refresh(); restoreDraft = null; modal.close(); render(); toast("Резервну копію відновлено");
+      break;
+    }
+    case "reset-draft":
+      if (confirm("Скинути незбережені зміни та відкрити початкові дані?")) {
+        clearEditorDraft(); prepareEditor(false); render();
+      }
+      break;
     case "filter":
       S.filter = id;
       document.querySelectorAll('[data-action="filter"]').forEach((chip) => {
@@ -1897,6 +2137,20 @@ async function action(a, b) {
         chip.setAttribute("aria-pressed", String(selected));
       });
       document.querySelector("#catalog-results").innerHTML = catalogResults();
+      break;
+    case "admin-catalog-filter":
+      S.adminCatalog.filter = id;
+      document.querySelectorAll('[data-action="admin-catalog-filter"]').forEach((chip) => {
+        const selected = chip.dataset.id === id;
+        chip.classList.toggle("active", selected);
+        chip.setAttribute("aria-pressed", String(selected));
+      });
+      document.querySelector("#admin-catalog-results").innerHTML = adminCatalogResults();
+      break;
+    case "reset-admin-catalog":
+      Object.assign(S.adminCatalog, { filter: "Усі", query: "", equipment: "", catalogSort: "name", withPhoto: false, favoritesOnly: false, archive: "all" });
+      render();
+      document.querySelector("#admin-catalog-search")?.focus();
       break;
     case "reset-catalog":
       S.favoritesOnly = false;
@@ -1923,6 +2177,8 @@ async function action(a, b) {
           <button class="mini-btn" data-action="close">Закрити</button>
         </div>
         <p class="muted">${s.date} · ${Math.round((s.endedAt - s.startedAt) / 60000)} хв</p>
+        ${btn("Виправити тренування", "edit-history", `data-id="${esc(s.id)}"`, "secondary")}
+        ${workoutDescription(s)}
         ${s.items
           .map(
             (i, k) => `
@@ -1956,11 +2212,44 @@ async function action(a, b) {
       break;
     }
     case "new-history":
+      editorPlanned = false;
       editorHistory = true;
       editorTemplate = false;
       editor = null;
       navigate("editor", "?history=1");
       break;
+    case "new-planned":
+      navigate("editor", `?planned=1${b.dataset.date ? `&date=${encodeURIComponent(b.dataset.date)}` : ""}`);
+      break;
+    case "repeat-history":
+      modal.close();
+      navigate("editor", `?planned=1&repeat=${encodeURIComponent(id)}`);
+      break;
+    case "reschedule": {
+      const s = S.sessions.find((s) => s.id === id && s.status === "planned");
+      if (!s) throw Error("Заплановане тренування не знайдено.");
+      openModal(`<h2>Перенести тренування</h2><p>${esc(s.name)}</p><form id="reschedule-form" data-id="${esc(id)}">${field("Нова дата", "date", s.date >= localDate() ? s.date : localDate(), "date", `required min="${localDate()}"`)}<div class="actions"><button type="submit" class="btn">Зберегти дату</button>${btn("Скасувати", "close", 'type="button"', "ghost")}</div><div class="form-error" role="alert"></div></form>`);
+      break;
+    }
+    case "edit-planned":
+      navigate("editor", `?planned=1&id=${encodeURIComponent(id)}`);
+      break;
+    case "delete-planned": {
+      if (!S.sessions.some((s) => s.id === id && s.status === "planned")) throw Error("Тренування не знайдено.");
+      if (!confirm("Скасувати заплановане тренування?")) break;
+      await db.remove(privatePath(`sessions/${id}`));
+      S.sessions = S.sessions.filter((s) => s.id !== id);
+      render();
+      toast("Заплановане тренування скасовано");
+      break;
+    }
+    case "start-planned": {
+      if (!ongoing()) await saveSession(startPlannedSession(S.sessions.find((s) => s.id === id)));
+      else toast("Спочатку заверши поточне тренування.");
+      S.route = "session";
+      render();
+      break;
+    }
     case "configure-sets": {
       collectEditor();
       const item = editor.days[n].items[j];
@@ -2057,6 +2346,7 @@ async function action(a, b) {
     case "edit-program":
     case "edit-template":
       editorHistory = false;
+      editorPlanned = false;
       editorTemplate = a.includes("template");
       if (editorTemplate && !owner()) throw Error("Немає доступу");
       editor = id
@@ -2071,13 +2361,14 @@ async function action(a, b) {
       render();
       break;
     case "cancel-editor":
-      if (confirm("Скасувати незбережені зміни?")) {
-        S.route = editorTemplate ? "admin" : "program";
+      if (confirm("Скасувати незбережені зміни та видалити чернетку?")) {
+        clearEditorDraft();
+        S.route = editorPlanned ? "home" : editorTemplate ? "admin" : "program";
         render();
       }
       break;
     case "add-day":
-      if (editorHistory || editor.days.length >= 7) break;
+      if (editorHistory || editorPlanned || editor.days.length >= 7) break;
       collectEditor();
       editor.days.push({
         weekday: [0, 1, 2, 3, 4, 5, 6].find((x) => !editor.days.some((d) => d.weekday === x)),
@@ -2089,7 +2380,7 @@ async function action(a, b) {
       render();
       break;
     case "remove-day":
-      if (editorHistory) break;
+      if (editorHistory || editorPlanned) break;
       collectEditor();
       editor.days.splice(n, 1);
       editorOpenDay = null;
@@ -2100,10 +2391,28 @@ async function action(a, b) {
       if (day) { day.open = true; editorOpenDay = n; day.scrollIntoView({ block: "start" }); }
       break;
     }
+    case "add-custom-item": {
+      const input = document.querySelector(`#custom-exercise-${n}`);
+      const name = input.value.trim();
+      if (!name || name.length > 100) {
+        input.focus();
+        throw Error("Впиши назву вправи своїми словами — до 100 символів.");
+      }
+      collectEditor();
+      if (editor.days[n].items.length >= 30) throw Error("До 30 вправ у тренуванні.");
+      editor.days[n].items.push({ custom: true, name, sets: 3,
+        reps: editorHistory ? "10" : "10–12", seconds: 0, weight: 0, rest: 60, note: "", metrics: [] });
+      editorOpenDay = n;
+      render();
+      const j = editor.days[n].items.length - 1;
+      document.querySelector(`[name="customname-${n}-${j}"]`)?.focus();
+      break;
+    }
     case "add-item": {
       const e = S.exercises.find((x) => x.id === document.querySelector(`#add-${n}`).value);
       if (!e || e.archived || editorTemplate && e.personal) throw Error("Спочатку оберіть вправу.");
       collectEditor();
+      if (editor.days[n].items.length >= 30) throw Error("До 30 вправ у тренуванні.");
       const timed = ["Кардіо", "Розминка"].includes(e.primary);
       editor.days[n].items.push({
         exerciseId: e.id,
@@ -2186,7 +2495,7 @@ async function action(a, b) {
       }
       const p = S.programs.find((x) => x.id === b.dataset.program) || active(),
         d = schedule(p, +b.dataset.day);
-      if (!d?.items.length) throw Error("Додай вправи до цього дня у редакторі програми.");
+      if (!hasWorkoutContent(d)) throw Error("Опиши тренування або додай вправи до цього дня у редакторі програми.");
       const s = newSession(p, d);
       s.id = crypto.randomUUID();
       await saveSession(s);
@@ -2197,6 +2506,10 @@ async function action(a, b) {
     case "resume":
       S.route = "session";
       render();
+      break;
+    case "finish-text":
+      await saveSession(completeTextSession(ongoing()));
+      toast("Тренування збережено в історію");
       break;
     case "timer": {
       const s = copy(ongoing());
@@ -2272,6 +2585,7 @@ async function action(a, b) {
   }
 }
 document.addEventListener("click", async (event) => {
+  if (S.timerSound) timerSound.unlock();
   document.querySelectorAll(".admin-row-menu[open]").forEach((menu) => {
     if (!menu.contains(event.target) || event.target.closest("[data-action]")) menu.open = false;
   });
@@ -2302,6 +2616,7 @@ document.addEventListener("toggle", (event) => {
       document.querySelectorAll(selector).forEach((other) => { if (other !== day) other.open = false; });
       if (day.dataset.editorDay !== undefined) editorOpenDay = +day.dataset.editorDay;
     } else if (day.dataset.editorDay !== undefined && editorOpenDay === +day.dataset.editorDay) editorOpenDay = null;
+    if (day.dataset.editorDay !== undefined) persistEditorDraft();
   }
   if (!event.target.matches?.(".admin-row-menu[open]")) return;
   document.querySelectorAll(".admin-row-menu[open]").forEach((menu) => {
@@ -2309,6 +2624,12 @@ document.addEventListener("toggle", (event) => {
   });
 }, true);
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && event.target.dataset.customExercise !== undefined) {
+    event.preventDefault();
+    const n = event.target.dataset.customExercise;
+    document.querySelector(`[data-action="add-custom-item"][data-n="${n}"]`)?.click();
+    return;
+  }
   if (event.target.matches?.('.detail-tabs [role="tab"]') && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
     event.preventDefault();
     const tabs = [...modal.querySelectorAll('[role="tab"]')], index = tabs.indexOf(event.target);
@@ -2332,6 +2653,7 @@ document.addEventListener("invalid", (event) => {
 }, true);
 document.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (S.timerSound) timerSound.unlock();
   if (busy) return;
   const f = event.target,
     v = new FormData(f),
@@ -2339,6 +2661,18 @@ document.addEventListener("submit", async (event) => {
   busy = true;
   button.disabled = true;
   try {
+    if (f.id === "history-edit-form") {
+      const session = S.sessions.find((s) => s.id === f.dataset.id);
+      const logs = session.logs.map((l, k) => ({ ...l, reps: +v.get(`log-reps-${k}`), weight: +v.get(`log-weight-${k}`), seconds: +v.get(`log-seconds-${k}`),
+        metrics: (l.metrics || []).map((m, j) => ({ ...m, value: String(v.get(`log-metric-${k}-${j}`) || "").trim() })) }));
+      await saveSession(editCompletedSession(session, { name: String(v.get("name")), date: v.get("date"), description: String(v.get("description") || ""), minutes: +v.get("minutes"), logs }));
+      modal.close(); toast("Результати виправлено");
+    }
+    if (f.id === "restore-form") {
+      const file = document.querySelector("#restore-file").files[0];
+      if (!file || file.size > 15000000) throw Error("Обери JSON розміром до 15 МБ.");
+      restoreDraft = parseBackup(await file.text()); restorePreview();
+    }
     if (f.id === "auth-form") {
       if (!db) throw Error("Зачекай на підключення Firebase.");
       const email = String(v.get("email") || "").trim(),
@@ -2357,10 +2691,22 @@ document.addEventListener("submit", async (event) => {
     }
     if (f.id === "program-form") {
       collectEditor();
+      if (editorPlanned) {
+        if (editor.id && !S.sessions.some((s) => s.id === editor.id && s.status === "planned"))
+          throw Error("Заплановане тренування не знайдено. Онови сторінку.");
+        const session = plannedSession(editor, plannedDate);
+        session.id = editor.id || crypto.randomUUID();
+        await saveSession(session);
+        clearEditorDraft();
+        navigate("home");
+        toast("Окреме тренування заплановано");
+        return;
+      }
       if (editorHistory) {
         const session = pastSession(editor, historyDate, historyMinutes);
         session.id = crypto.randomUUID();
         await saveSession(session);
+        clearEditorDraft();
         navigate("profile");
         toast("Тренування записано в історію");
         return;
@@ -2374,6 +2720,7 @@ document.addEventListener("submit", async (event) => {
         editorTemplate ? `programTemplates/${id}` : privatePath(`programs/${id}`),
         data,
       );
+      clearEditorDraft();
       if (!editorTemplate) {
         await db.patch(`users/${S.user.uid}`, { activeProgramId: id });
         S.profile.activeProgramId = id;
@@ -2382,6 +2729,13 @@ document.addEventListener("submit", async (event) => {
       S.route = editorTemplate ? "admin" : "program";
       render();
       toast("Програму збережено");
+    }
+    if (f.id === "reschedule-form") {
+      const session = S.sessions.find((s) => s.id === f.dataset.id);
+      const updated = rescheduleSession(session, v.get("date"));
+      await saveSession(updated);
+      modal.close();
+      toast("Дату тренування змінено");
     }
     if (f.id === "set-form") {
       const current = ongoing(),
@@ -2476,6 +2830,15 @@ function filterPicker(day) {
   select.value = list.some((e) => e.id === selected) ? selected : "";
 }
 document.addEventListener("input", (event) => {
+  if (event.target.id === "history-search") {
+    S.historyFilters.query = event.target.value;
+    document.querySelector("#history-results").innerHTML = filteredHistory();
+  }
+  if (event.target.closest("#program-form")) persistEditorDraft(true);
+  if (event.target.id === "admin-catalog-search") {
+    S.adminCatalog.query = event.target.value;
+    document.querySelector("#admin-catalog-results").innerHTML = adminCatalogResults();
+  }
   if (event.target.id === "admin-user-search") document.querySelector("#admin-users-list").innerHTML = adminUsersList(event.target.value);
   if (event.target.dataset.pickerSearch !== undefined) filterPicker(event.target.dataset.pickerSearch);
   if (event.target.id === "search") {
@@ -2485,6 +2848,31 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (target.dataset.historyFilter) {
+    S.historyFilters[target.dataset.historyFilter] = target.value;
+    document.querySelector("#history-results").innerHTML = filteredHistory(); return;
+  }
+  if (target.id === "timer-sound" || target.id === "timer-vibration") {
+    if (target.id === "timer-sound") S.timerSound = target.checked;
+    else S.timerVibration = target.checked;
+    if (S.timerSound) timerSound.unlock();
+    try { localStorage.setItem(`nexus:timers:${S.user.uid}`, JSON.stringify({ sound: S.timerSound, vibration: S.timerVibration })); }
+    catch { toast("Не вдалося зберегти налаштування на пристрої."); }
+    return;
+  }
+  if (target.closest("#program-form")) persistEditorDraft(true);
+  if (["progress-metric", "progress-period", "progress-exercise"].includes(target.id)) {
+    if (target.id === "progress-metric") S.progressMetric = target.value;
+    else if (target.id === "progress-period") S.progressPeriod = target.value;
+    else S.progressExercise = target.value;
+    document.querySelector("#progress-view").innerHTML = progressView();
+    return;
+  }
+  if (target.dataset.adminCatalog) {
+    S.adminCatalog[target.dataset.adminCatalog] = target.type === "checkbox" ? target.checked : target.value;
+    document.querySelector("#admin-catalog-results").innerHTML = adminCatalogResults();
+    return;
+  }
   if (target.dataset.pickerGroup !== undefined) {
     filterPicker(target.dataset.pickerGroup);
     return;
@@ -2506,28 +2894,35 @@ window.addEventListener("pageshow", (event) => {
   const card = document.querySelector(".auth-card");
   card?.getAnimations().forEach((animation) => animation.cancel());
 });
+window.addEventListener("pagehide", () => persistEditorDraft(true));
 
-window.addEventListener("offline", () => {
-  const e = document.querySelector("#offline");
-  if (e)
-    e.innerHTML = `
-      <div class="error">Немає мережі. Не закривай сторінку до збереження змін.</div>
-    `;
-});
-window.addEventListener("online", () => {
-  const e = document.querySelector("#offline");
-  if (e) e.innerHTML = "";
-  toast("З’єднання відновлено. Можна зберігати зміни.");
+window.addEventListener("nexus-sync", (event) => { S.syncError = event.detail.error || ""; updateSyncNotice(); });
+window.addEventListener("offline", updateSyncNotice);
+window.addEventListener("online", async () => {
+  if (!S.user?.emailVerified || !db?.sync) return;
+  try {
+    await db.sync(); S.syncError = ""; await refresh();
+    if (S.route !== "editor" && !modal.open && !busy) render(); else updateSyncNotice();
+    toast("З’єднання відновлено. Дані синхронізовано.");
+  } catch (error) { S.syncError = err(error); updateSyncNotice(); }
 });
 setInterval(
-  () =>
+  () => {
     document.querySelectorAll("[data-end]").forEach((e) => {
       const end = +e.dataset.end;
       e.textContent = clock(end ? remaining(end) : +e.dataset.default || 0);
-    }),
+    });
+    checkTimerNotifications();
+  },
   1000,
 );
+setInterval(() => {
+  if (navigator.onLine && S.user?.emailVerified && db?.pending?.() && !busy)
+    db.sync().catch((error) => { S.syncError = err(error); updateSyncNotice(); });
+}, 15000);
 async function handleUser(user) {
+  editorDraftKey = "";
+  editor = null;
   S.user = user;
   S.isOwner = false;
   S.loaded = false;
@@ -2539,6 +2934,12 @@ async function handleUser(user) {
   S.exercisePreferences = {};
   S.adminUsers = [];
   S.templates = [];
+  restoreDraft = null; S.syncError = ""; notifiedTimers.clear();
+  S.timerSound = true; S.timerVibration = false;
+  if (user) try {
+    const preferences = JSON.parse(localStorage.getItem(`nexus:timers:${user.uid}`));
+    S.timerSound = preferences?.sound !== false; S.timerVibration = preferences?.vibration === true;
+  } catch {}
   modal.close();
   if (!user || !user.emailVerified || authPages.includes(currentPage)) {
     render();
@@ -2548,9 +2949,11 @@ async function handleUser(user) {
   try {
     S.isOwner = await db.isOwner();
     S.profile = await db.profile(user);
+    await db.sync().catch((error) => { S.syncError = err(error); });
     await refresh();
     if (db.auth.currentUser?.uid !== user.uid) return;
     if (currentPage === "editor") prepareEditor();
+    expiredTimers(ongoing(), notifiedTimers);
     render();
   } catch (e) {
     shell(`
@@ -2588,4 +2991,5 @@ async function boot() {
 document.addEventListener("click", (e) => {
   if (e.target.closest('[data-action="reload"]')) location.reload();
 });
+if ("serviceWorker" in navigator) navigator.serviceWorker.register(new URL("../sw.js", import.meta.url)).catch(() => {});
 boot();

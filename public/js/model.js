@@ -39,6 +39,7 @@ export function newSession(program, day) {
   return {
     programId: program.id,
     name: day.name,
+    description: day.description || "",
     date: localDate(),
     startedAt: Date.now(),
     endedAt: 0,
@@ -72,6 +73,9 @@ export function validMetrics(metrics) {
   );
 }
 const bounded = (v, max) => Number.isFinite(v) && v >= 0 && v <= max;
+export function hasWorkoutContent(day) {
+  return !!(day?.items?.length || (typeof day?.description === "string" && day.description.trim()));
+}
 export function setPlan(item, index) {
   return { reps: item.reps, weight: item.weight, seconds: item.seconds, rest: item.rest,
     ...(item.setPlans?.[index] || {}) };
@@ -85,7 +89,7 @@ export function validSetPlans(item) {
 export function pastSession(program, date, minutes = 0, now = new Date()) {
   const day = program?.days?.[0];
   const parsed = new Date(`${date}T12:00:00`);
-  if (!validProgram(program) || !day.items.length || program.days.length !== 1 ||
+  if (!validProgram(program) || !hasWorkoutContent(day) || program.days.length !== 1 ||
       !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) ||
       localDate(parsed) !== date || date > localDate(now) || !bounded(minutes, 1440))
     throw Error("Перевір дату, тривалість та вправи тренування.");
@@ -106,6 +110,26 @@ export function pastSession(program, date, minutes = 0, now = new Date()) {
       metrics: copy(item.metrics || []), at: s.endedAt };
   }));
   return s;
+}
+export function plannedSession(program, date, now = new Date()) {
+  const parsed = new Date(`${date}T12:00:00`);
+  if (!validProgram(program) || program.days.length !== 1 || !hasWorkoutContent(program.days[0]) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) ||
+      localDate(parsed) !== date || date < localDate(now))
+    throw Error("Обери сьогоднішню або майбутню дату та опиши тренування або додай вправи з допустимими параметрами.");
+  return { ...newSession({ id: "" }, program.days[0]), name: program.name,
+    date, status: "planned", startedAt: 0 };
+}
+export function startPlannedSession(session) {
+  if (session?.status !== "planned" || !hasWorkoutContent(session))
+    throw Error("Заплановане тренування не знайдено.");
+  return { ...copy(session), status: "active", plannedDate: session.date,
+    date: localDate(), startedAt: Date.now(), updatedAt: Date.now() };
+}
+export function completeTextSession(session) {
+  if (session?.status !== "active" || session.items?.length || !hasWorkoutContent(session))
+    throw Error("Тренування словами не знайдено.");
+  return { ...copy(session), status: "completed", endedAt: Date.now(), restEnd: 0, timerEnd: 0 };
 }
 export function validProgram(p) {
   return (
@@ -128,6 +152,7 @@ export function validProgram(p) {
         d.name.length <= 100 &&
         typeof d.groups === "string" &&
         d.groups.length <= 200 &&
+        (d.description === undefined || (typeof d.description === "string" && d.description.length <= 4000)) &&
         Array.isArray(d.items) &&
         d.items.length <= 30 &&
         d.items.every(
