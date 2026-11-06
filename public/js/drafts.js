@@ -14,7 +14,7 @@ export function loadDraft(storage, key) {
     const draft = JSON.parse(storage.getItem(key));
     const p = draft?.editor;
     if (draft?.version !== 1 || !p || typeof p.name !== "string" || !Array.isArray(p.days) ||
-        p.days.length > 7 || !p.days.every((d) => d && typeof d.name === "string" && Array.isArray(d.items) &&
+        p.days.length > (p.scheduleMode === "sequence" ? 30 : 7) || !p.days.every((d) => d && typeof d.name === "string" && Array.isArray(d.items) &&
           d.items.length <= 30 && d.items.every((i) => i && typeof i.name === "string" &&
             (i.metrics === undefined || Array.isArray(i.metrics)) && (i.setPlans === undefined || Array.isArray(i.setPlans))))) return null;
     return draft;

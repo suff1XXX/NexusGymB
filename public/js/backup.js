@@ -16,7 +16,9 @@ export function parseBackup(text) {
       !data.programs.every((p) => validId(p.id) && validProgram(p)) ||
       !data.sessions.every((s) => validId(s.id) && validSession(s)) || data.sessions.filter((s) => s.status === 'active').length > 1)
     throw Error("Резервна копія містить некоректні програми або тренування.");
-  const programs = data.programs.map((p) => ({ id: p.id, name: p.name, type: p.type, days: copy(p.days), archived: !!p.archived }));
+  const programs = data.programs.map((p) => ({ id: p.id, name: p.name, type: p.type, days: copy(p.days), archived: !!p.archived,
+    ...(p.scope ? { scope: p.scope } : {}), ...(p.builderMode ? { builderMode: p.builderMode } : {}),
+    ...(p.scheduleMode ? { scheduleMode: p.scheduleMode } : {}) }));
   const sessions = data.sessions.map((s) => copy(s));
   const exercises = data.exercises.map((e) => {
     if (!e || !e.personal || typeof e.id !== 'string' || !e.id.startsWith('personal:') || !validId(e.id.slice(9))) throw Error("Некоректна особиста вправа.");

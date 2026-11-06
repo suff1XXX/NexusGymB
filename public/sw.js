@@ -1,8 +1,8 @@
-const CACHE = "nexus-shell-v1";
+const CACHE = "nexus-shell-v3";
 const base = new URL('./', self.location.href);
 const files = ['index.html','home.html','program.html','profile.html','workout.html','editor.html','exercises.html','admin.html','styles.css','favicon.svg',
-  'js/app.js','js/model.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/drafts.js',
-  'js/training-data.js','js/offline.js','js/history.js','js/backup.js','js/notifications.js'];
+  'js/theme.js','js/app.js','js/model.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/drafts.js',
+  'js/training-data.js','js/offline.js','js/history.js','js/backup.js','js/notifications.js','js/activity.js','js/sharing.js'];
 const sdk = ['firebase-app.js','firebase-auth.js','firebase-firestore.js'].map((file) => `https://www.gstatic.com/firebasejs/11.10.0/${file}`);
 self.addEventListener('install', (event) => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);

@@ -4,7 +4,16 @@
   "type": "module",
   "scripts": {
     "test": "node --test tools/*.test.mjs",
+    "test:browser": "node tools/browser-check.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-nexus-gymb \"node tools/rules-check.mjs\"",
     "start": "node tools/preview.mjs",
     "serve": "node tools/preview.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.10.0"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.13.6"
   }
 }

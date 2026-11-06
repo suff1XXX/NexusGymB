@@ -44,7 +44,8 @@ export function monthDays(month) {
 }
 
 export function calendarEvents(program, sessions, date) {
-  const day = program?.days.find((d) => d.weekday === weekday(new Date(`${date}T12:00:00`)));
+  const day = program?.scheduleMode !== "sequence" && program?.scope !== "home"
+    ? program?.days.find((d) => d.weekday === weekday(new Date(`${date}T12:00:00`))) : undefined;
   return [
     ...(day ? [{ kind: "program", name: day.name, programId: program.id, weekday: day.weekday }] : []),
     ...sessions.filter((s) => s.date === date).map((s) => ({ kind: s.status, name: s.name, id: s.id })),

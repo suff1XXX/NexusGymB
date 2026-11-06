@@ -10,6 +10,7 @@ export const groups = [
   "Ноги",
   "Сідниці",
   "Прес",
+  "Шия",
   "Кардіо",
   "Розминка",
 ];
@@ -27,17 +28,29 @@ export function remaining(end, now = Date.now()) {
 export function clock(s) {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
-export function schedule(program, day = weekday()) {
-  return program?.days.find((x) => x.weekday === day);
+export function dayLabel(program, day, full = false) {
+  return program?.scheduleMode === "sequence" ? `День ${program.days.indexOf(day) + 1}` : (full ? days : dayCodes)[day.weekday];
+}
+export function schedule(program, day) {
+  if (day === undefined && program?.scheduleMode === "sequence") return undefined;
+  return program?.days.find((x) => x.weekday === (day ?? weekday()));
 }
 export function nextDay(program, day = weekday()) {
+  if (program?.scheduleMode === "sequence") return program.days[0];
   return [...(program?.days || [])].sort(
     (a, b) => ((a.weekday - day + 7) % 7) - ((b.weekday - day + 7) % 7),
   )[0];
 }
+export function nextSequenceDay(program, sessions) {
+  const last = sessions.filter((s) => s.programId === program?.id && s.status === "completed" && Number.isInteger(s.dayId))
+    .sort((a, b) => b.endedAt - a.endedAt)[0];
+  const index = program?.days.findIndex((d) => d.weekday === last?.dayId) ?? -1;
+  return program?.days[(index + 1) % program.days.length];
+}
 export function newSession(program, day) {
   return {
     programId: program.id,
+    dayId: day.weekday,
     name: day.name,
     description: day.description || "",
     date: localDate(),
@@ -137,16 +150,20 @@ export function validProgram(p) {
     typeof p.name === "string" &&
     p.name.trim().length > 0 &&
     p.name.length <= 100 &&
+    (p.scope === undefined || ["main", "home"].includes(p.scope)) &&
+    (p.builderMode === undefined || ["simple", "cross", "advanced"].includes(p.builderMode)) &&
+    (p.scheduleMode === undefined || ["week", "sequence"].includes(p.scheduleMode)) &&
     types.includes(p.type) &&
     Array.isArray(p.days) &&
     p.days.length > 0 &&
-    p.days.length <= 7 &&
+    p.days.length <= (p.scheduleMode === "sequence" ? 30 : 7) &&
+    (p.scope !== "home" || (p.days.length === 1 && hasWorkoutContent(p.days[0]))) &&
     new Set(p.days.map((d) => d?.weekday)).size === p.days.length &&
     p.days.every(
       (d) =>
         !!d && Number.isInteger(d.weekday) &&
         d.weekday >= 0 &&
-        d.weekday <= 6 &&
+        d.weekday < (p.scheduleMode === "sequence" ? 30 : 7) &&
         typeof d.name === "string" &&
         d.name.trim().length > 0 &&
         d.name.length <= 100 &&
@@ -169,6 +186,9 @@ export function validProgram(p) {
             bounded(i.seconds, 7200) &&
             bounded(i.weight, 1000) &&
             validSetPlans(i) &&
+            (i.builderFeatures === undefined || (Array.isArray(i.builderFeatures) &&
+              i.builderFeatures.length <= 8 && i.builderFeatures.every((key) =>
+                ["sets", "reps", "seconds", "weight", "rest", "note", "plans", "metrics"].includes(key)))) &&
             (i.note === undefined || (typeof i.note === "string" && i.note.length <= 500)) &&
             validMetrics(i.metrics),
         ),

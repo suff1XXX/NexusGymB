@@ -81,6 +81,12 @@ export async function connect() {
     async isOwner() {
       return auth.currentUser?.uid === OWNER_UID;
     },
+    async markActive(uid) {
+      if (!navigator.onLine || !auth.currentUser?.emailVerified || auth.currentUser.uid !== uid) return false;
+      // Presence writes go directly to the server; old offline writes must never look like new activity.
+      await commit([{ kind: "patch", path: `users/${uid}`, data: { lastActiveAt: C.serverTimestamp() } }]);
+      return true;
+    },
     watch: (fn) => {
       authListeners.add(fn);
       const stop = B.onAuthStateChanged(auth, (user) => {
@@ -178,6 +184,11 @@ export async function connect() {
         await locked(`nexus-data-${auth.currentUser.uid}`, () => queue.cache(path, s.exists() ? s.data() : null));
       } catch (error) { if (!retryable(error)) throw error; }
       return queue.cached(path);
+    },
+    async getLive(path) {
+      requireOnline();
+      const snapshot = await timeout(C.getDocFromServer(C.doc(db, path)));
+      return snapshot.exists() ? snapshot.data() : null;
     },
     async save(path, data) {
       await mutate([{ kind: "save", path, data }]);

@@ -46,7 +46,8 @@ export function parseImport(text) {
     throw Error("Додай від 1 до 100 вправ або шаблонів.");
   const programs = templates.map((p, index) => {
     if (!validProgram(p)) throw Error(`Шаблон №${index + 1}: перевір назву, тип, дні та підходи.`);
-    return { name: p.name, type: p.type, days: p.days, archived: false };
+    return { name: p.name, type: p.type, days: p.days, archived: false,
+      ...(p.scheduleMode ? { scheduleMode: p.scheduleMode } : {}), ...(p.builderMode ? { builderMode: p.builderMode } : {}) };
   });
   return { exercises: exercises.map(exerciseData), programTemplates: programs };
 }
