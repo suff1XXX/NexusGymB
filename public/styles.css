@@ -23,6 +23,9 @@ body {
 body {
   margin: 0;
   min-height: 100dvh;
+  background: var(--profile-page-background, var(--bg));
+  background-size: cover;
+  background-position: center;
 }
 button,
 input,
@@ -1850,9 +1853,12 @@ summary { cursor: pointer; }
 .profile-custom { background:var(--profile-background);background-size:cover;background-position:center;color:var(--text);border-radius:28px;padding:24px; }
 .profile-custom[data-background="dynamic"] { background-size:300% 300%;animation:profile-background-flow 18s ease-in-out infinite; }
 .profile-custom .card,.profile-custom .profile-hero { background:var(--panel);color:var(--text); }
+.profile-page-custom { color:var(--text); }
+.profile-page-custom .card { background:var(--panel); }
+body[data-background="dynamic"] { background-size:300% 300%;animation:profile-background-flow 18s ease-in-out infinite; }
 .appearance-preview { margin:20px 0;padding:30px;border:1px solid var(--line); }
 .appearance-preview .card { margin:0;padding:20px; }
 .appearance-settings input[type="color"] { height:46px;padding:4px; }
 @keyframes profile-background-flow { 0%,100%{background-position:0% 50%}50%{background-position:100% 50%} }
 @media(max-width:600px){.athlete-profile.profile-custom{padding:12px;border-radius:20px;}}
-@media(prefers-reduced-motion:reduce){.profile-custom[data-background="dynamic"]{animation:none}}
+@media(prefers-reduced-motion:reduce){.profile-custom[data-background="dynamic"],body[data-background="dynamic"]{animation:none}}

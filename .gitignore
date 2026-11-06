@@ -1,5 +1,14 @@
 node_modules/
 *-debug.log
+*-debug*.log
+*-debug*.log.*
+firestore.rules
+**/firestore.rules
+storage.rules
+**/storage.rules
+firebase-debug.*
+firestore-debug.*
+ui-debug.*
 .firebase/
 .sites-runtime/
 .env

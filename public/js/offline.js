@@ -23,7 +23,16 @@ export function createOfflineStore(storage, uid) {
   return {
     pending: () => read().jobs.length,
     jobs: () => read().jobs,
-    cache(path, value) { const state = read(); state.cache[path] = value; write(state); },
+    cache(path, value) { const state = read(); state.cache[path] = value; (state.cachedAt ||= {})[path] = Date.now(); write(state); },
+    fresh(path, age = 60000) { const at = read().cachedAt?.[path]; return Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at < age; },
+    invalidate(paths) {
+      const state = read();
+      for (const path of paths) {
+        delete state.cachedAt?.[path];
+        delete state.cachedAt?.[path.slice(0, path.lastIndexOf('/'))];
+      }
+      write(state);
+    },
     cached(path) {
       const state = read();
       let value = state.cache[path];

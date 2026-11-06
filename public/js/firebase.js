@@ -8,6 +8,9 @@ import { profileSnapshots, sharedRecords, recordSharingKeys } from "./profile-da
 import { inviteSession } from './training-invites.js';
 import { reportData } from './community-safety.js';
 import { progressSessions } from './manual-sets.js';
+import { createReadCache } from './read-cache.js';
+import { statsSignature, publishOnce } from './stats-publication.js';
+import { activityMillis } from './activity.js';
 let api,
   registering = false;
 const authListeners = new Set();
@@ -58,6 +61,10 @@ export async function connect() {
       else batch.set(ref, op.data);
     }
     await timeout(batch.commit());
+    if (auth.currentUser) await locked(`nexus-data-${auth.currentUser.uid}`, () => store().invalidate([
+      ...operations.map(op => op.path),
+      ...(profileWrite ? [`profileCards/${auth.currentUser.uid}`] : []),
+    ]));
   };
   const mutate = async (operations) => {
     const uid = auth.currentUser?.uid;
@@ -105,7 +112,7 @@ export async function connect() {
       requireOnline();
       if (!['homeWorkouts','nutrition','profileCustomization'].includes(key)) throw Error('Невідомий тип доступу.');
       const ref = C.doc(db, `userAccess/${uid}`);
-      return C.runTransaction(db, async transaction => {
+      const result = await C.runTransaction(db, async transaction => {
         const snapshot = await transaction.get(ref);
         const previous = snapshot.exists() ? snapshot.data() : {};
         const data = { homeWorkouts: previous.homeWorkouts === true, nutrition: previous.nutrition === true,profileCustomization:previous.profileCustomization===true };
@@ -113,6 +120,8 @@ export async function connect() {
         transaction.set(ref,data);
         return data;
       });
+      store().invalidate([`userAccess/${uid}`]);
+      return result;
     },
     async saveNutritionGenerator(value) {
       requireOnline();
@@ -129,10 +138,21 @@ export async function connect() {
     },
     async markActive(uid) {
       if (!navigator.onLine || !auth.currentUser?.emailVerified || auth.currentUser.uid !== uid) return false;
-      // Presence writes go directly to the server; old offline writes must never look like new activity.
-      await commit([{ kind: "patch", path: `users/${uid}`, data: { lastActiveAt: C.serverTimestamp() } }]);
-      await commit([{ kind: 'save', path: `publicProfiles/${uid}/stats/lastActive`, data: { at: C.serverTimestamp() } }]);
-      return true;
+      return locked(`nexus-presence-${uid}`, async () => {
+        const key = `nexus:presence:${uid}`;
+        try {
+          const elapsed = Date.now() - Number(localStorage.getItem(key));
+          if (elapsed >= 0 && elapsed < 120000) return false;
+        } catch {}
+        if (auth.currentUser?.uid !== uid) return false;
+        // One batch and one presence update across tabs every two minutes.
+        await commit([
+          { kind: 'patch', path: `users/${uid}`, data: { lastActiveAt: C.serverTimestamp() } },
+          { kind: 'save', path: `publicProfiles/${uid}/stats/lastActive`, data: { at: C.serverTimestamp() } },
+        ]);
+        try { localStorage.setItem(key, String(Date.now())); } catch {}
+        return true;
+      });
     },
     watch: (fn) => {
       authListeners.add(fn);
@@ -179,25 +199,29 @@ export async function connect() {
       requireOnline();
       const ref = C.doc(db, "users", user.uid),
         counter = C.doc(db, "counters", "users");
-      await C.runTransaction(db, async (t) => {
-        const snap = await t.get(ref);
-        if (snap.exists() && Number.isInteger(snap.data().customId)) return;
-        const count = await t.get(counter),
-          next = (count.exists() ? count.data().lastId : 0) + 1;
-        const profile = snap.exists()
-          ? snap.data()
-          : {
-              name: user.displayName || "",
-              email: user.email || "",
-              photo: user.photoURL || "",
-              createdAt: Date.parse(user.metadata?.creationTime || "") || Date.now(),
-              activeProgramId: "",
-            };
-        t.set(counter, { lastId: next });
-        t.set(C.doc(db, "userNumbers", String(next)), { uid: user.uid });
-        t.set(ref, { ...profile, customId: next });
-      });
-      let profile = (await C.getDocFromServer(ref)).data();
+      const initial = await timeout(C.getDocFromServer(ref));
+      let profile = initial.data();
+      if (!initial.exists() || !Number.isInteger(profile.customId)) {
+        await C.runTransaction(db, async (t) => {
+          const snap = await t.get(ref);
+          if (snap.exists() && Number.isInteger(snap.data().customId)) return;
+          const count = await t.get(counter),
+            next = (count.exists() ? count.data().lastId : 0) + 1;
+          const profile = snap.exists()
+            ? snap.data()
+            : {
+                name: user.displayName || "",
+                email: user.email || "",
+                photo: user.photoURL || "",
+                createdAt: Date.parse(user.metadata?.creationTime || "") || Date.now(),
+                activeProgramId: "",
+              };
+          t.set(counter, { lastId: next });
+          t.set(C.doc(db, "userNumbers", String(next)), { uid: user.uid });
+          t.set(ref, { ...profile, customId: next });
+        });
+        profile = (await C.getDocFromServer(ref)).data();
+      }
       const time = loginTime(user);
       if (newerLogin(profile, time)) {
         try {
@@ -217,22 +241,8 @@ export async function connect() {
       }
       return profile;
     },
-    async list(path) {
-      const queue = store();
-      if (navigator.onLine) try {
-        const docs = (await timeout(C.getDocsFromServer(C.collection(db, path)))).docs.map((x) => ({ ...x.data(), id: x.id }));
-        await locked(`nexus-data-${auth.currentUser.uid}`, () => queue.cache(path, docs));
-      } catch (error) { if (!retryable(error)) throw error; }
-      return queue.cached(path);
-    },
-    async get(path) {
-      const queue = store();
-      if (navigator.onLine) try {
-        const s = await timeout(C.getDocFromServer(C.doc(db, path)));
-        await locked(`nexus-data-${auth.currentUser.uid}`, () => queue.cache(path, s.exists() ? s.data() : null));
-      } catch (error) { if (!retryable(error)) throw error; }
-      return queue.cached(path);
-    },
+    list: (path) => cachedRead(path, ['exercises', 'programTemplates'].includes(path) ? 300000 : 60000),
+    get: (path) => cachedRead(path),
     async getLive(path) {
       requireOnline();
       try {
@@ -257,7 +267,16 @@ export async function connect() {
         const identity={name:data.name,photo:data.photo,customId:data.customId,isPrivate:data.isPrivate===true};
         if(!card.exists()||Object.entries(identity).some(([key,value])=>card.data()[key]!==value))t.set(cardRef,identity);
       });
-      if (!friendDirectories.has(uid)) { await api.syncFriendDirectory(); friendDirectories.add(uid); }
+      if (!friendDirectories.has(uid)) {
+        await locked(`nexus-friends-${uid}`, async () => {
+          const key = `nexus:friend-directory:v1:${uid}`;
+          try { if (localStorage.getItem(key)) return; } catch {}
+          // Existing accounts need this migration once; friendship actions maintain it afterwards.
+          await api.syncFriendDirectory();
+          try { localStorage.setItem(key, 'done'); } catch {}
+        });
+        friendDirectories.add(uid);
+      }
     },
     async changeAvatar(photo) {
       requireOnline();
@@ -312,7 +331,7 @@ export async function connect() {
       const cached=identityLookups.get(uid);
       if(cached && Date.now()-cached.at<30000)return cached.promise;
       const promise=(async()=>{
-        const card=await api.getLive(`profileCards/${uid}`);
+        const card=await cachedRead(`profileCards/${uid}`,300000);
         const person=card||await api.getLive(`publicProfiles/${uid}`);
         return {name:person?.name||'Спортсмен',photo:person?.photo||'',customId:person?.customId||null};
       })();
@@ -346,6 +365,10 @@ export async function connect() {
         if (added) transaction.set(ref, { kind, createdAt: C.serverTimestamp() });
         else transaction.delete(ref);
       });
+      await locked(`nexus-data-${auth.currentUser.uid}`, () => store().invalidate([
+        `${path}/reactions/${auth.currentUser.uid}`,
+        `${path}/likes/${auth.currentUser.uid}`,
+      ]));
       if (added) await api.recordActivity('reaction', path, kind);
     },
     async recordActivity(type, target, detail = '') {
@@ -383,25 +406,30 @@ export async function connect() {
     },
     async publishProfileStats(sessions, manualSets = []) {
       requireOnline();
+      sessions = structuredClone(sessions);
+      manualSets = structuredClone(manualSets);
       const uid = auth.currentUser.uid;
-      await C.runTransaction(db,async transaction=>{
-        const preference=await transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`));
-        const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets);
-        for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
-      });
-      const completed = sessions.filter(s => s.status === 'completed').sort((a,b) => String(b.date).localeCompare(String(a.date))).slice(0,30);
-      const existing = await api.list(`publicProfiles/${uid}/workoutActivity`);
-      const operations = existing.filter(e => !completed.some(s => s.id === e.id)).map(e => ({ kind: 'remove', path: `publicProfiles/${uid}/workoutActivity/${e.id}` }));
-      for (const session of completed) {
-        const detail = String(session.name || 'Тренування').slice(0,100);
-        const createdAt = new Date(session.endedAt || session.updatedAt || session.date);
-        const previous = existing.find(entry => entry.id === session.id);
-        if (previous?.detail === detail && previous.createdAt?.toMillis?.() === createdAt.getTime()) continue;
-        operations.push({ kind: 'save', path: `publicProfiles/${uid}/workoutActivity/${session.id}`,
-          data: { type: 'workout', target: session.id, detail, createdAt } });
-      }
-      if (operations.length) await commit(operations);
-
+      const signature = await statsSignature(sessions, manualSets, new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }));
+      return locked(`nexus-stats-${uid}`, () => publishOnce(localStorage, `nexus:published-stats:v1:${uid}`, signature, async () => {
+        if (auth.currentUser?.uid !== uid) throw Error('Обліковий запис змінився.');
+        await C.runTransaction(db,async transaction=>{
+          const preference=await transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`));
+          const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets);
+          for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
+        });
+        const completed = sessions.filter(s => s.status === 'completed').sort((a,b) => String(b.date).localeCompare(String(a.date))).slice(0,30);
+        const existing = await api.list(`publicProfiles/${uid}/workoutActivity`);
+        const operations = existing.filter(e => !completed.some(s => s.id === e.id)).map(e => ({ kind: 'remove', path: `publicProfiles/${uid}/workoutActivity/${e.id}` }));
+        for (const session of completed) {
+          const detail = String(session.name || 'Тренування').slice(0,100);
+          const createdAt = new Date(session.endedAt || session.updatedAt || session.date);
+          const previous = existing.find(entry => entry.id === session.id);
+          if (previous?.detail === detail && activityMillis(previous.createdAt) === createdAt.getTime()) continue;
+          operations.push({ kind: 'save', path: `publicProfiles/${uid}/workoutActivity/${session.id}`,
+            data: { type: 'workout', target: session.id, detail, createdAt } });
+        }
+        if (operations.length) await commit(operations);
+      }));
     },
     async addProfileComment(uid, text, parentId = '', photo = '', richText = '') {
       requireOnline();
@@ -566,6 +594,22 @@ export async function connect() {
       await mutate(paths.map((path) => ({ kind: "remove", path })));
     },
   };
+  const readers = new Map();
+  function cachedRead(path, age = 60000) {
+    const uid = auth.currentUser?.uid;
+    if (!readers.has(uid)) readers.set(uid, createReadCache({
+      store: store(uid), online: () => navigator.onLine, retryable,
+      lock: fn => locked(`nexus-data-${uid}`, fn),
+      fetch: async path => {
+        if (path.split('/').length % 2) {
+          return (await timeout(C.getDocsFromServer(C.collection(db, path)))).docs.map(x => ({ ...x.data(), id: x.id }));
+        }
+        const snapshot = await timeout(C.getDocFromServer(C.doc(db, path)));
+        return snapshot.exists() ? snapshot.data() : null;
+      },
+    }));
+    return readers.get(uid)(path, age);
+  }
   const onlineProfile = api.profile;
   api.profile = async (user) => {
     const queue = store(user.uid), path = `users/${user.uid}`;

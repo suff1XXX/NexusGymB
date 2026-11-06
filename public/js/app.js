@@ -17,7 +17,7 @@ import { shareableProgram, shareToken, programShareURL } from "./sharing.js";
 import { connect } from "./firebase.js";
 import { trainingStreak, personalRecords, previousWorkingSet, memberDays } from "./fitness.js";
 import { avatarSource, prepareAvatar, prepareBanner, prepareProfileBackground, bannerSource, contactURL } from "./people.js";
-import { appearanceDefaults,profileAppearance,appearanceStyle } from './profile-appearance.js';
+import { appearanceDefaults,profileAppearance,appearanceStyle,applyProfilePageAppearance } from './profile-appearance.js';
 import { loginIpHistory } from "./login-metadata.js";
 import { profileVisibility, profileSnapshots, recordSharingKeys, commentThreads } from "./profile-data.js";
 import { appBase, profileNumber, profileURL } from "./routes.js";
@@ -96,6 +96,8 @@ const S = {
   catalogScope: "all",
   adminCatalog: { filter: "Усі", query: "", equipment: "", catalogSort: "name", withPhoto: false, favoritesOnly: false, catalogScope: "shared", archive: "all" },
   loaded: false,
+  communityLoading: false,
+  publicProfileReady: false,
   calendarMonth: initialCalendarDate.slice(0, 7),
   calendarDate: initialCalendarDate,
   progressMetric: "weight",
@@ -237,6 +239,7 @@ function err(e) {
       "Додай домен сайту до Authorized domains у Firebase Authentication.",
     "auth/operation-not-allowed": "У Firebase потрібно увімкнути Email/Password.",
     "permission-denied": "Немає доступу до бази. Підтвердь пошту та перевір правила Firestore.",
+    "resource-exhausted": "Вичерпано квоту бази даних. Доступ відновиться після поновлення квоти або зміни тарифу адміністратором.",
     "auth/network-request-failed": "Не вдалося підключитися до Firebase. Перевір мережу.",
   };
   return codes[e.code] || e.message || "Не вдалося виконати дію. Спробуй ще раз.";
@@ -559,6 +562,7 @@ function shell(content) {
     </main>
   `;
   previousScrollY = Math.max(0, window.scrollY || 0);
+  applyProfilePageAppearance(S.loaded && S.route === 'profile' && !S.people?.error && !S.people?.person?.restricted ? S.people?.person?.appearance : null);
   updateNoticeBadge();
 }
 
@@ -1713,9 +1717,10 @@ function personAvatar(person) {
   const photo = avatarSource(person?.photo);
   return photo ? `<img class="avatar" src="${esc(photo)}" alt="Аватар" loading="lazy" />` : `<span class="avatar">${esc(person?.name?.[0] || 'G')}</span>`;
 }
-async function loadPeople() {
+async function loadPeople({ ensure = true, isCurrent, onIdentity } = {}) {
   let uid = profileUid();
   const userId = S.user.uid;
+  isCurrent ||= () => S.user?.uid === userId;
   const warnings = [];
   const optional = async (section, load, fallback) => {
     try { return await load(); }
@@ -1727,14 +1732,21 @@ async function loadPeople() {
   };
   try {
     if (!navigator.onLine) throw Error('Профілі Gym Bro та коментарі доступні з інтернетом.');
-    await optional('синхронізація профілю', () => db.ensurePublicProfile(S.profile), null);
+    if (ensure) await optional('синхронізація профілю', () => db.ensurePublicProfile(S.profile), null);
     if (requestedProfileNumber()) {
       const number = await db.getLive(`userNumbers/${requestedProfileNumber()}`);
       if (!number) throw Error('Користувача з таким ID не знайдено.');
       uid = number.uid;
     }
     const person=await db.getLive(`publicProfiles/${uid}`);
-    if(uid===userId)S.recordVisibility=await optional('видимість рекордів',()=>db.getLive(privatePath('recordSettings/visibility')),null);
+    if (!isCurrent()) return;
+    if (S.route === 'settings' && uid === userId) {
+      S.selfPublic = person;
+      S.people = { uid, person, profiles: {}, relations: [], comments: [], stats: {}, publicFriends: [], recent: [], tags: [], warnings: [], error: '' };
+      return;
+    }
+    onIdentity?.({ uid, person });
+    const recordVisibility = uid===userId ? await optional('видимість рекордів',()=>db.getLive(privatePath('recordSettings/visibility')),null) : null;
     const [relations,comments,labels,block]=await Promise.all([
       optional('Gym Bro',()=>db.gymBros(),[]),
       person?.restricted?Promise.resolve([]):optional('коментарі',()=>db.profileComments(uid),[]),
@@ -1744,7 +1756,7 @@ async function loadPeople() {
       : profileVisibility(person).gymBros ? await optional('список друзів', () => db.publicGymBros(uid), []) : [];
     const publicPeers = publicFriends.map((r)=>r.from === uid ? r.to : r.from);
     const peers = [...new Set([...publicPeers, ...relations.map((r) => r.from === userId ? r.to : r.from), ...comments.map((c) => c.authorId)])];
-    const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await optional('автори й друзі', () => db.getLive(`publicProfiles/${id}`), null)])));
+    const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await optional('автори й друзі', () => db.publicIdentity(id), null)])));
     const stats = uid===userId?{...profileSnapshots(S.sessions,null,S.manualSets),lastActive:{at:S.profile?.lastActiveAt||Date.now()}}:{};
     if (uid !== userId && person && !person.restricted) await Promise.all(Object.entries(profileVisibility(person)).map(async ([key, visible]) => {
       if (visible && !['gymBros','activity','workouts'].includes(key)) try { stats[key] = await db.getLive(`publicProfiles/${uid}/stats/${key}`); }
@@ -1753,12 +1765,13 @@ async function loadPeople() {
     const visibility = profileVisibility(person);
     const recent = !person?.restricted && (uid === userId || visibility.activity) ? await optional('стрічка активності', () => db.recentActivity(uid), []) : [];
     const workouts = !person?.restricted && (uid === userId || (visibility.activity && visibility.workouts)) ? await optional('активність тренувань', () => db.recentActivity(uid, true), []) : [];
-    if (S.user?.uid !== userId) return;
+    if (!isCurrent()) return;
+    if (uid === userId) S.recordVisibility = recordVisibility;
     S.people = { recent: [...recent, ...workouts].sort((a,b) => activityMillis(b.createdAt)-activityMillis(a.createdAt)).slice(0,30), uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], warnings: [...new Set(warnings)], error: '' };
     if (uid === userId) S.selfPublic = person;
   } catch (error) {
     console.warn('Не вдалося відкрити профіль:', { uid, code: error.code, message: error.message });
-    if (S.user?.uid === userId) S.people = { uid, error: err(error) };
+    if (isCurrent()) S.people = { uid, error: err(error) };
   }
 }
 function friendButtons(uid) {
@@ -1868,9 +1881,12 @@ function restoreSetInputs() {
   const fields = loadSetDraft(localStorage, S.user.uid, session);
   if (fields) for (const [key,value] of Object.entries(fields)) if (form.elements[key]) form.elements[key].value = value;
 }
-async function loadSafety() {
-  S.blocked = await db.blockedUsers();
-  S.blockedProfiles = Object.fromEntries(await Promise.all(S.blocked.map(async (b)=>[b.id, await db.getLive(`publicProfiles/${b.id}`)])));
+async function loadSafety(isCurrent = () => true) {
+  const blocked = await db.blockedUsers();
+  const profiles = Object.fromEntries(await Promise.all(blocked.map(async (b)=>[b.id, await db.publicIdentity(b.id)])));
+  if (!isCurrent()) return;
+  S.blocked = blocked;
+  S.blockedProfiles = profiles;
 }
 function blockedPanel() {
   return `<section class="card"><h2>Заблоковані користувачі</h2><p class="small muted">Вони не можуть коментувати твій профіль, відповідати тобі чи надсилати заявки й запрошення. Блокування прибирає дружбу.</p>${S.blocked.map((b)=>`<div class="gym-bro-row">${personAvatar(S.blockedProfiles[b.id])}<strong class="grow">${esc(S.blockedProfiles[b.id]?.name || 'Спортсмен')}</strong>${btn('Розблокувати','unblock-person',`data-id="${esc(b.id)}"`,'secondary')}</div>`).join('') || '<p class="muted">Немає заблокованих користувачів.</p>'}</section>`;
@@ -1954,6 +1970,8 @@ function sharedStats() {
   return `${stats.progress?`<section class="card profile-progress-summary"><h2>Прогрес спортсмена ${privateProfileBadge('progress')}</h2><div class="profile-metrics"><div><strong>${stats.progress.workouts}</strong><span>Тренувань</span></div><div><strong>${stats.progress.sets}</strong><span>Підходів</span></div><div><strong>${Math.round(stats.progress.volume)}</strong><span>кг загалом</span></div></div></section>`:''}${S.people.uid!==S.user.uid&&stats.records?recordsCard(stats.records.items||[]):''}`;
 }
 function profile() {
+  if (S.communityLoading && !S.people?.person) return heading('Профіль спортсмена') + '<section class="card" role="status">Завантажуємо профіль…</section>';
+  if (S.people?.loading) return `<div ${profileAppearanceAttributes(S.people.person)}><section class="card">${personAvatar(S.people.person)}<h1>${esc(S.people.person.name || 'Спортсмен')}</h1><p role="status">Завантажуємо розділи профілю…</p></section></div>`;
   if(!S.people?.person||S.people.error)return heading('Профіль спортсмена')+peoplePanel();
   const own=S.people.uid===S.user.uid,person=S.people.person;
   if(person.restricted)return `<div class="athlete-profile">${profileHero(person,false)}<section class="card closed-profile"><h2>Цей профіль закрито</h2><p class="muted">Інформацію профілю та коментарі бачать лише друзі. Надішли заявку, щоб отримати доступ.</p></section></div>`;
@@ -1966,6 +1984,8 @@ function profileAppearanceAttributes(person) {
   try{const a=profileAppearance(person.appearance);return `class="athlete-profile profile-custom" data-background="${a.mode}" style="${appearanceStyle(a)}"`;}catch{return 'class="athlete-profile"';}
 }
 function settings() {
+  if (S.communityLoading) return heading('Налаштування') + '<section class="card" role="status">Завантажуємо налаштування профілю…</section>';
+  if (!S.selfPublic || S.people?.error) return heading('Налаштування') + `<section class="card"><p class="error">${esc(S.people?.error || 'Не вдалося завантажити налаштування профілю.')}</p>${btn('Спробувати знову','reload')}</section>`;
   const person = S.selfPublic || {}, visibility = profileVisibility(person);
   return heading('Налаштування', 'Профіль, приватність і твій застосунок.', btn('До профілю', 'route', 'data-id="profile"', 'secondary')) + `<div class="settings-layout"><nav class="settings-sections" aria-label="Розділи налаштувань">${[['user','Користувач'],['privacy','Конфіденційність'],['security','Безпека']].map(([key,label])=>btn(label,'settings-section',`data-section="${key}" aria-pressed="${S.settingsSection === key}"`,'ghost')).join('')}</nav><div data-settings-section="user" ${S.settingsSection === 'user' ? '' : 'hidden'}><section class="card"><div class="sectionhead"><h2>Твій профіль</h2>${personAvatar(person)}</div><form id="location-form"><label>Місцеположення<input name="location" value="${esc(person.location || '')}" maxlength="100" placeholder="" /></label><p class="small muted">Відображається у профілі. Залиш порожнім, щоб не вказувати.</p><button class="btn secondary" type="submit">Зберегти місцеположення</button><div class="form-error" role="alert"></div></form><form id="bio-form"><h3>Про себе</h3>${richComposer({name:'bio',maxLength:400,htmlLimit:8000,draft:{text:person.bio||'',html:person.bioRich||''},placeholder:'Кілька слів про тебе й твою мету'})}<button class="btn secondary" type="submit">Зберегти опис</button><div class="form-error" role="alert"></div></form><form id="avatar-form"><label>Аватар<input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Фото буде обрізано до квадрата.</p><button type="submit" class="btn secondary">Завантажити аватар</button><div class="form-error" role="alert"></div></form><form id="banner-form"><h3>Банер профілю</h3>${bannerSource(person.banner) ? `<img class="banner-preview" src="${esc(person.banner)}" alt="Твій банер" />` : ''}<label>Зображення банера<input name="banner" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Широкий формат 1200 × 320.</p><div class="actions"><button type="submit" class="btn secondary">Завантажити банер</button>${person.banner ? btn('Прибрати банер','remove-banner','type="button"','ghost') : ''}</div><div class="form-error" role="alert"></div></form></section>${contactsEditor()}${profileAppearanceEditor()}        <section class="card"><h2>Вигляд</h2><label>Тема<select id="theme-select">${options(["Світла", "Темна", "Системна"], themePreference)}</select></label></section>
         <section class="card"><h2>Сповіщення таймера</h2>${soundControls()}</section>
@@ -1977,11 +1997,11 @@ function settings() {
 function profileAppearanceEditor() {
   if(!owner()&&!S.customizationAccess)return '';
   let a;try{a=profileAppearance(S.selfPublic?.appearance||{});}catch{a={...appearanceDefaults};}
-  return `<section class="card appearance-settings"><h2>Оформлення профілю</h2><form id="profile-appearance-form"><label>Фон<select name="mode">${[['solid','Статичний колір'],['gradient','Градієнт'],['dynamic','Динамічний градієнт'],['image','Зображення']].map(([key,title])=>`<option value="${key}" ${a.mode===key?'selected':''}>${title}</option>`).join('')}</select></label><div class="formgrid">${[['background','Колір фону'],['backgroundEnd','Другий колір'],['blocks','Колір блоків'],['text','Колір тексту']].map(([key,title])=>`<label>${title}<input type="color" name="${key}" value="${a[key]}"/></label>`).join('')}<label>Кут градієнта<input name="angle" type="number" min="0" max="360" step="1" value="${a.angle}" required/></label></div><label>Фонове зображення<input name="backgroundImage" type="file" accept="image/jpeg,image/png,image/webp"/></label><label class="photo-toggle"><input name="removeImage" type="checkbox"/> Прибрати збережене зображення</label><div class="appearance-preview profile-custom" data-appearance-preview data-background="${a.mode}" style="${appearanceStyle(a)}"><div class="card"><strong>Твій профіль</strong><p class="muted">Так виглядатимуть блоки та текст</p></div></div><div class="actions"><button type="submit" class="btn">Зберегти оформлення</button>${btn('Стандартний вигляд','reset-profile-appearance','type="button"','ghost')}</div><div class="form-error" role="alert"></div></form></section>`;
+  return `<section class="card appearance-settings"><h2>Оформлення профілю</h2><form id="profile-appearance-form"><label>Фон<select name="mode">${[['solid','Статичний колір'],['gradient','Градієнт'],['dynamic','Динамічний градієнт'],['image','Зображення']].map(([key,title])=>`<option value="${key}" ${a.mode===key?'selected':''}>${title}</option>`).join('')}</select></label><div class="formgrid">${[['background','Колір фону'],['backgroundEnd','Другий колір'],['blocks','Колір блоків'],['text','Колір тексту']].map(([key,title])=>`<label>${title}<input type="color" name="${key}" value="${a[key]}"/></label>`).join('')}<label>Кут градієнта<input name="angle" type="number" min="0" max="360" step="1" value="${a.angle}" required/></label></div><label>Фонове зображення<input name="backgroundImage" type="file" accept="image/jpeg,image/png,image/webp"/></label><label class="photo-toggle"><input name="removeImage" type="checkbox"/> Прибрати збережене зображення</label><div class="appearance-preview profile-custom" data-appearance-preview data-background="${a.mode}" style="${appearanceStyle(a)}"><div class="card"><strong>Твій профіль</strong><p class="muted">Так виглядатимуть блоки та текст</p></div></div><p class="small muted">Зміни видно одразу в попередньому перегляді. Збережене оформлення бачать відвідувачі твого профілю.</p><div class="actions"><button type="submit" class="btn">Зберегти оформлення</button>${btn('Стандартний вигляд','reset-profile-appearance','type="button"','ghost')}</div><div class="form-error" role="alert"></div></form></section>`;
 }
 document.addEventListener('input',event=>{
   const form=event.target.closest('#profile-appearance-form');if(!form)return;
-  try{const a=profileAppearance({...Object.fromEntries(new FormData(form)),angle:Number(form.elements.angle.value),image:S.selfPublic?.appearance?.image||''});const preview=form.querySelector('[data-appearance-preview]');preview.style.cssText=appearanceStyle(a);preview.dataset.background=a.mode;}catch{}
+  try{const a=profileAppearance({...Object.fromEntries(new FormData(form)),angle:Number(form.elements.angle.value),image:form.elements.removeImage.checked?'':S.selfPublic?.appearance?.image||''});const preview=form.querySelector('[data-appearance-preview]');preview.style.cssText=appearanceStyle(a);preview.dataset.background=a.mode;}catch{}
 });
 function inviteWorkoutDialog(uid) {
   const programs = S.programs.filter((p)=>p.scope !== 'home' && !p.archived && p.days.some(hasWorkoutContent));
@@ -2035,7 +2055,7 @@ function updateImageCrop() {
   drawProfileCrop(canvas,imageEdit.bitmap,imageEdit.kind,imageEdit.crop);
 }
 async function openPerson(uid, commentId = '') {
-  const person = uid === S.user.uid ? S.selfPublic : S.people?.profiles?.[uid] || await db.getLive(`publicProfiles/${uid}`);
+  const person = uid === S.user.uid ? S.selfPublic || S.profile : S.people?.profiles?.[uid] || await db.publicIdentity(uid);
   if (!person?.customId) throw Error('Профіль ще не доступний.');
   location.assign(profileURL(person.customId) + (commentId ? `#comment-${encodeURIComponent(commentId)}` : ''));
 }
@@ -2055,7 +2075,7 @@ function startNoticeWatch() {
   stopNotices?.();
   stopNotices = db.watchNotifications(async (notices) => {
     const currentRevision = ++revision;
-    const actors = Object.fromEntries(await Promise.all([...new Set(notices.map((n)=>n.actorId))].map(async (id)=>[id, await db.getLive(`publicProfiles/${id}`).catch(()=>null)])));
+    const actors = Object.fromEntries(await Promise.all([...new Set(notices.map((n)=>n.actorId))].map(async (id)=>[id, await db.publicIdentity(id).catch(()=>null)])));
     if (S.user?.uid !== uid || currentRevision !== revision) return;
     S.notices = notices.filter((n)=>!S.blocked.some((b)=>b.id === n.actorId)).map((n)=>({ ...n, actor: actors[n.actorId] })); S.noticeError = '';
     updateNoticeBadge();
@@ -2503,7 +2523,7 @@ async function loadCommunity(id) {
   box.loadToken = token;
   try {
     const [ratings, comments] = await Promise.all([db.list(`${scope}/${id}/ratings`), db.list(`${scope}/${id}/comments`)]);
-    const authors = Object.fromEntries(await Promise.all([...new Set(comments.map(c => c.authorId))].map(async uid => [uid, await db.getLive(`publicProfiles/${uid}`)])));
+    const authors = Object.fromEntries(await Promise.all([...new Set(comments.map(c => c.authorId))].map(async uid => [uid, await db.publicIdentity(uid)])));
     const summaries = Object.fromEntries(await Promise.all(comments.map(async c => [c.id, await db.commentReactions(`${scope}/${id}/comments/${c.id}`)])));
     if (!box.isConnected || box.loadToken !== token) return;
     const draft=captureCommentDraft(box.querySelector('#comment-form'));
@@ -2662,7 +2682,7 @@ ${esc(e[k] || "")}</textarea
     </form>
   `);
 }
-async function refresh() {
+async function refresh({ isCurrent = () => true } = {}) {
   S.measurementsError = '';
   S.manualSetsError = '';
   const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access, measurements, manualSets] = await Promise.all([
@@ -2680,6 +2700,7 @@ async function refresh() {
     db.list(privatePath('measurements')).catch((error)=>{S.measurementsError=err(error);return []; }),
     db.list(privatePath('manualSets')).catch((error)=>{S.manualSetsError=err(error);return []; }),
   ]);
+  if (!isCurrent()) return;
   if (owner() && S.route === "admin") {
     const retired = [
       ...exercises.filter((e) => demoExerciseIds.has(e.id)).map((e) => `exercises/${e.id}`),
@@ -2687,6 +2708,7 @@ async function refresh() {
     ];
     if (retired.length) await db.removeMany(retired);
   }
+  if (!isCurrent()) return;
   Object.assign(S, {
     homeAccess: access?.homeWorkouts === true,
     customizationAccess:access?.profileCustomization===true,
@@ -2702,7 +2724,7 @@ async function refresh() {
     loaded: true,
   });
   if (S.route === 'nutrition' || (owner() && S.route === 'admin')) await loadNutrition();
-  if (navigator.onLine && S.selfPublic) await db.publishProfileStats(sessions,manualSets).catch((error) => console.warn('Статистика профілю:', error.code));
+  if (navigator.onLine && S.publicProfileReady) db.publishProfileStats(sessions,manualSets).catch((error) => console.warn('Статистика профілю:', error.code));
 }
 async function saveSession(s) {
   const wasActive = S.sessions.some((session)=>session.id === s.id && session.status === 'active');
@@ -4142,7 +4164,10 @@ setInterval(() => {
 setInterval(() => activity.pulse(), 60000);
 document.addEventListener("visibilitychange", () => activity.pulse());
 document.addEventListener("input", () => activity.pulse());
+let userLoadRevision = 0;
 async function handleUser(user) {
+  const revision = ++userLoadRevision;
+  const isCurrent = () => revision === userLoadRevision && db.auth.currentUser?.uid === user?.uid;
   stopNotices?.(); stopNotices = null;
   S.notices = []; S.noticeError = ''; S.selfPublic = null; replyingTo = null;
   S.blocked=[]; S.blockedProfiles={}; S.reports=[]; S.reportProfiles={}; S.invites=[];
@@ -4156,6 +4181,8 @@ async function handleUser(user) {
   S.customizationAccess=false;
   S.adminAccess = {};
   S.loaded = false;
+  S.communityLoading = ['profile', 'settings'].includes(currentPage);
+  S.publicProfileReady = false;
   S.route = currentPage;
   S.profile = null;
   S.people = null;
@@ -4183,29 +4210,25 @@ async function handleUser(user) {
   }
   render();
   try {
-    S.isOwner = await db.isOwner();
-    S.profile = await db.profile(user);
-    await db.sync().catch((error) => { S.syncError = err(error); });
-    await refresh();
-    if (db.auth.currentUser?.uid !== user.uid) return;
-    if(navigator.onLine)await loadSafety().catch((error)=>console.warn('Не вдалося завантажити блокування:',error.code));
-    if (navigator.onLine) {
-      await db.ensurePublicProfile(S.profile).catch((error)=>console.warn('Профіль спільноти:', error.code));
-      S.selfPublic = await db.getLive(`publicProfiles/${user.uid}`).catch(()=>null);
-      await db.publishProfileStats(S.sessions,S.manualSets).catch((error)=>console.warn('Статистика профілю:', error.code));
-    }
-    startNoticeWatch();
-    if (['profile', 'settings'].includes(currentPage)) await loadPeople();
+    const isOwner = await db.isOwner();
+    if (!isCurrent()) return;
+    S.isOwner = isOwner;
+    const [profile] = await Promise.all([db.profile(user), refresh({ isCurrent })]);
+    if (!isCurrent()) return;
+    S.profile = profile;
     activity.pulse();
     if (currentPage === "editor") prepareEditor();
     expiredTimers(ongoing(), notifiedTimers);
     render();
-    if (currentPage === 'profile' && S.people?.person?.customId && (requestedProfileNumber() || new URLSearchParams(location.search).has('uid'))) {
-      window.history.replaceState(null, '', profileURL(S.people.person.customId) + location.hash);
-    }
-    if (location.hash.startsWith('#comment-')) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ block: 'center' });
+    // Offline reads already include queued edits. Sending them must not hold up the page.
+    const synced = db.sync().then(() => true).catch((error) => {
+      if (isCurrent()) { S.syncError = err(error); updateSyncNotice(); }
+      return false;
+    });
+    loadCommunityInBackground(isCurrent, synced).catch((error) => console.warn('Додаткові дані:', error.code || error.message));
     if (requestedShare()) await openIncomingShare();
   } catch (e) {
+    if (!isCurrent()) return;
     shell(`
       <section class="card">
         ${heading("Не вдалося завантажити дані")}
@@ -4220,6 +4243,33 @@ async function handleUser(user) {
       </section>
     `);
   }
+}
+async function loadCommunityInBackground(isCurrent, synced) {
+  const safety = navigator.onLine ? loadSafety(isCurrent).catch((error) => console.warn('Блокування:', error.code)) : Promise.resolve();
+  safety.then(() => { if (isCurrent()) startNoticeWatch(); }).catch((error) => console.warn('Сповіщення:', error.code));
+  if (navigator.onLine) {
+    const ready = await db.ensurePublicProfile(S.profile).then(() => true).catch((error) => { console.warn('Профіль спільноти:', error.code); return false; });
+    if (!isCurrent()) return;
+    synced.then((success) => {
+      if (!success || !isCurrent()) return;
+      S.publicProfileReady = ready;
+      if (ready) return db.publishProfileStats(S.sessions,S.manualSets);
+    }).catch((error) => console.warn('Статистика профілю:', error.code));
+  }
+  if (!S.communityLoading || !isCurrent()) return;
+  await safety;
+  await loadPeople({ ensure: false, isCurrent, onIdentity: ({ uid, person }) => {
+    if (!isCurrent() || !person) return;
+    S.people = { uid, person, loading: true };
+    render();
+  } });
+  if (!isCurrent()) return;
+  S.communityLoading = false;
+  render();
+  if (currentPage === 'profile' && S.people?.person?.customId && (requestedProfileNumber() || new URLSearchParams(location.search).has('uid'))) {
+    window.history.replaceState(null, '', profileURL(S.people.person.customId) + location.hash);
+  }
+  if (location.hash.startsWith('#comment-')) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ block: 'center' });
 }
 async function boot() {
   bootError = "";
