@@ -1,4 +1,4 @@
-const CACHE = "nexus-shell-v13";
+const CACHE = "nexus-shell-v14";
 const base = new URL('./', self.location.href);
 const files = ['index.html','home.html','program.html','profile.html','settings.html','workout.html','editor.html','exercises.html','admin.html','styles.css','favicon.svg',
   'js/theme.js','js/app.js','js/model.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/drafts.js',

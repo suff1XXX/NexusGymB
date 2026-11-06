@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment,assertFails,assertSucceeds } from '@firebase/rules-unit-testing';
-import { doc,setDoc,getDoc,getDocs,updateDoc,deleteDoc,collection,serverTimestamp,writeBatch,setLogLevel } from 'firebase/firestore';
+import { doc,setDoc,getDoc,getDocs,updateDoc,deleteDoc,collection,serverTimestamp,writeBatch,setLogLevel,query,where,orderBy,limit,getCountFromServer } from 'firebase/firestore';
 setLogLevel('silent');
 const env=await initializeTestEnvironment({projectId:'demo-nexus-gymb',firestore:{rules:readFileSync('firestore.rules','utf8')}});
 const auth=(uid,verified=true)=>env.authenticatedContext(uid,{email_verified:verified,email:`${uid}@example.test`}).firestore();
@@ -16,6 +16,14 @@ try {
     }
   });
   const path='users/alice/measurements/2026-11-06',record={date:'2026-11-06',weight:70,waist:80,note:'Приватно',updatedAt:1};
+  // Exercise the same reads as the profile page, including absent tags and likes.
+  await ok(getDoc(doc(alice,'publicProfiles/alice')));
+  await ok(getDoc(doc(alice,'userLabels/alice')));
+  await ok(getDocs(query(collection(alice,'gymBros'),where('members','array-contains','alice'))));
+  await ok(setDoc(doc(alice,'publicProfiles/alice/comments/self'),{authorId:'alice',authorName:'alice',text:'Hello',createdAt:serverTimestamp()}));
+  await ok(getDocs(query(collection(alice,'publicProfiles/alice/comments'),orderBy('createdAt','desc'),limit(50))));
+  await ok(getCountFromServer(collection(alice,'publicProfiles/alice/comments/self/likes')));
+  await ok(getDoc(doc(alice,'publicProfiles/alice/comments/self/likes/alice')));
   await ok(setDoc(doc(alice,path),record));await ok(getDoc(doc(alice,path)));await ok(getDocs(collection(alice,'users/alice/measurements')));
   for(const other of [bob,admin,auth('alice',false),env.unauthenticatedContext().firestore()]){
     await no(getDoc(doc(other,path)));await no(getDocs(collection(other,'users/alice/measurements')));

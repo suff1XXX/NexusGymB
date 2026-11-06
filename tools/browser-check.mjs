@@ -37,7 +37,7 @@ export async function connect(){return {
  get:async p=>get(p),getLive:async p=>get(p),list:async p=>list(p),
  save:async(p,v)=>{const data=read();data[p]=v;write(data);},patch:async(p,v)=>{const data=read();data[p]={...data[p],...v};write(data);},remove:async p=>{const data=read();delete data[p];write(data);},
  saveMany:async entries=>{const data=read();for(const [p,v]of entries)data[p]=v;write(data);},
- ensurePublicProfile:async()=>{},gymBros:async()=>[],publicGymBros:async()=>[],profileComments:async()=>[],blockedUsers:async()=>[],blockStatus:async()=>({iBlocked:false,blockedMe:false}),
+ ensurePublicProfile:async()=>{},gymBros:async()=>[],publicGymBros:async()=>[],profileComments:async()=>{if(localStorage.getItem("test-comments-denied"))throw Object.assign(Error("Denied"),{code:"permission-denied"});return [];},blockedUsers:async()=>[],blockStatus:async()=>({iBlocked:false,blockedMe:false}),
  publishProfileStats:async sessions=>{const data=read();for(const [key,value]of Object.entries(profileSnapshots(sessions)))data['publicProfiles/'+uid+'/stats/'+key]=value;write(data);},
  watchNotifications:fn=>{queueMicrotask(()=>fn([]));return ()=>{};},trainingInvites:async()=>[],
 };}
@@ -95,6 +95,13 @@ try{
   await click('✓ Завершити підхід');await click('Завершити достроково');await page.locator('.workout-summary').waitFor();
   await page.getByText('Завершено достроково',{exact:true}).waitFor();
   assert.equal(await page.locator('.summary-metrics > div').nth(1).locator('strong').textContent(),'1');
+  await page.evaluate(()=>localStorage.setItem('test-comments-denied','1'));
+  await page.goto(origin+'/u/1');await page.locator('.profile-hero').waitFor();
+  await page.getByRole('heading',{name:'Аліса',exact:true}).waitFor();
+  await page.getByText('Не вдалося завантажити коментарі. Спробуй оновити сторінку.',{exact:true}).waitFor();
+  assert.equal(await page.getByText('Коментарів ще немає — будьте першим!',{exact:true}).count(),0);
+  await page.evaluate(()=>localStorage.removeItem('test-comments-denied'));
+  await page.reload();await page.locator('#profile-comment-form').waitFor();
   assert.deepEqual(errors,[]);
   console.log('PASS: summaries (complete, early, reload), measurement CRUD/chart/export, mobile layout and visitor/admin isolation');
 }catch(error){console.log('UI errors',errors,await page.locator('.form-error').allTextContents());await page.screenshot({path:'.sites-runtime/browser-failure.png',fullPage:true});throw error;}

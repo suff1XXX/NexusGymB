@@ -1574,35 +1574,50 @@ function personAvatar(person) {
 async function loadPeople() {
   let uid = profileUid();
   const userId = S.user.uid;
+  const warnings = [];
+  const optional = async (section, load, fallback) => {
+    try { return await load(); }
+    catch (error) {
+      console.warn(`Профіль · ${section}:`, error.code || error.message);
+      warnings.push(section);
+      return fallback;
+    }
+  };
   try {
     if (!navigator.onLine) throw Error('Профілі Gym Bro та коментарі доступні з інтернетом.');
-    await db.ensurePublicProfile(S.profile);
+    await optional('синхронізація профілю', () => db.ensurePublicProfile(S.profile), null);
     if (requestedProfileNumber()) {
       const number = await db.getLive(`userNumbers/${requestedProfileNumber()}`);
       if (!number) throw Error('Користувача з таким ID не знайдено.');
       uid = number.uid;
     }
     const [person, relations, comments, labels, block] = await Promise.all([
-      db.getLive(`publicProfiles/${uid}`), db.gymBros(), db.profileComments(uid), db.getLive(`userLabels/${uid}`), db.blockStatus(uid),
+      db.getLive(`publicProfiles/${uid}`),
+      optional('Gym Bro', () => db.gymBros(), []),
+      optional('коментарі', () => db.profileComments(uid), []),
+      optional('теги', () => db.getLive(`userLabels/${uid}`), null),
+      db.blockStatus(uid),
     ]);
     const publicFriends = uid === userId ? relations.filter((r)=>r.status === 'accepted')
-      : profileVisibility(person).gymBros ? await db.publicGymBros(uid) : [];
+      : profileVisibility(person).gymBros ? await optional('список друзів', () => db.publicGymBros(uid), []) : [];
     const publicPeers = publicFriends.map((r)=>r.from === uid ? r.to : r.from);
     const peers = [...new Set([...publicPeers, ...relations.map((r) => r.from === userId ? r.to : r.from), ...comments.map((c) => c.authorId)])];
-    const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await db.getLive(`publicProfiles/${id}`)])));
+    const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await optional('автори й друзі', () => db.getLive(`publicProfiles/${id}`), null)])));
     const stats = {};
     if (uid !== userId && person) await Promise.all(Object.entries(profileVisibility(person)).map(async ([key, visible]) => {
       if (visible && key !== 'gymBros') try { stats[key] = await db.getLive(`publicProfiles/${uid}/stats/${key}`); }
       catch (error) { if (error.code !== 'permission-denied') throw error; }
     }));
     if (S.user?.uid !== userId) return;
-    S.people = { uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], error: '' };
+    S.people = { uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], warnings: [...new Set(warnings)], error: '' };
     if (uid === userId) S.selfPublic = person;
   } catch (error) {
+    console.warn('Не вдалося відкрити профіль:', { uid, code: error.code, message: error.message });
     if (S.user?.uid === userId) S.people = { uid, error: err(error) };
   }
 }
 function friendButtons(uid) {
+  if (S.people?.warnings?.includes('Gym Bro')) return '<span class="small muted">Статус дружби тимчасово недоступний</span>';
   if (uid === S.people?.uid && S.people.block?.iBlocked) return btn('Розблокувати','unblock-person',`data-id="${esc(uid)}"`,'secondary');
   if (uid === S.people?.uid && S.people.block?.blockedMe) return '<span class="small muted">Взаємодія недоступна</span>';
   const relation = S.people?.relations?.find((r) => r.members.includes(uid));
@@ -1621,6 +1636,7 @@ function commentMarkup(comment, reply = false) {
 function commentsPanel() {
   const view = S.people;
   if (!view?.person || view.error) return '';
+  if (view.warnings?.includes('коментарі')) return `<section class="card profile-comments"><h2>Коментарі</h2><p role="alert">Не вдалося завантажити коментарі. Спробуй оновити сторінку.</p>${btn('Оновити', 'reload', '', 'secondary')}</section>`;
   const target = replyingTo && view.comments.find((c)=>c.id === replyingTo);
   return `<section class="card profile-comments"><div class="sectionhead"><h2>Коментарі</h2></div>${view.block?.iBlocked || view.block?.blockedMe ? '<p class="muted">Коментування недоступне.</p>' : `<form id="profile-comment-form">${personAvatar(S.selfPublic || S.profile)}<div class="comment-compose">${target ? `<div class="reply-target"><span>Відповідь для ${esc(target.authorName)}</span>${btn('Скасувати відповідь','cancel-comment-reply','type="button"','ghost')}</div>` : ''}<label class="comment-input"><span class="visually-hidden">${target ? 'Відповідь на коментар' : 'Написати коментар'}</span><textarea name="comment" maxlength="2000" rows="3" required placeholder="${target ? 'Написати відповідь…' : 'Написати коментар…'}"></textarea></label><button class="btn" type="submit">${target ? 'Надіслати відповідь' : 'Надіслати'}</button><div class="form-error" role="alert"></div></div></form>`}<div class="profile-comment-list">${commentThreads(view.comments).map((c)=>`<div class="comment-thread">${commentMarkup(c)}${c.replies.length ? `<div class="comment-replies">${c.replies.map((r)=>commentMarkup(r,true)).join('')}</div>` : ''}</div>`).join('') || '<p class="muted">Коментарів ще немає — будьте першим!</p>'}</div></section>`;
 }
@@ -1669,6 +1685,7 @@ function peoplePanel() {
   if (!view) return '<section class="card"><p>Завантажуємо профіль…</p></section>';
   if (view.error) return `<section class="card"><h2>Профіль</h2><p class="error">${esc(view.error)}</p>${btn('Оновити','refresh-people','','secondary')}</section>`;
   if (!view.person) return '<section class="card"><p>Профіль ще не доступний.</p></section>';
+  if (view.warnings?.some((name) => ['Gym Bro', 'список друзів'].includes(name))) return '<section class="card"><h2>Gym Bro</h2><p class="muted">Не вдалося завантажити список друзів.</p></section>';
   if (view.uid !== S.user.uid && !profileVisibility(view.person).gymBros) return '';
   const friends = view.publicFriends || [];
   return `<section class="card gym-bro-card"><button class="gym-bro-heading" data-action="open-gym-bros"><h2>Gym Bro <span>${friends.length}</span></h2><span aria-hidden="true">›</span></button><div class="gym-bro-strip">${friends.slice(0,4).map((r)=>{
@@ -1723,7 +1740,7 @@ function profile() {
   if (!S.people?.person || S.people.error) return heading('Профіль спортсмена') + peoplePanel();
   const own = S.people.uid === S.user.uid, person = S.people.person;
   const showFriends = own || profileVisibility(person).gymBros;
-  return `<div class="athlete-profile">${profileHero(person, own)}<div class="profile-columns ${showFriends ? '' : 'no-sidebar'}">${showFriends ? `<aside class="profile-sidebar">${peoplePanel()}</aside>` : ''}<div class="profile-feed">${own ? `<section class="card private-summary"><span class="eyebrow">Твій простір · статистику бачиш ти</span><div class="profile-metrics"><div><strong>${S.sessions.filter((s)=>s.status==='completed').length}</strong><span>Тренувань</span></div><div><strong>${S.programs.length}</strong><span>Програм</span></div><div><strong>${personalRecords(S.sessions).length}</strong><span>Рекордів</span></div></div></section>` : sharedStats()}${commentsPanel()}${own ? `<div id="measurements-view">${measurementsPanel()}</div>${recordsCard()}<div id="progress-view">${progressView()}</div><section class="card"><h2>Історія тренувань <span class="private-label">Лише для тебе</span></h2>${historyTools()}<div id="history-results">${filteredHistory()}</div></section>` : ''}</div></div></div>`;
+  return `<div class="athlete-profile">${profileHero(person, own)}${S.people.warnings?.length ? `<section class="card" role="alert"><p>Не вдалося завантажити: ${esc(S.people.warnings.join(", "))}. Решта профілю доступна.</p>${btn("Оновити", "reload", "", "secondary")}</section>` : ""}<div class="profile-columns ${showFriends ? '' : 'no-sidebar'}">${showFriends ? `<aside class="profile-sidebar">${peoplePanel()}</aside>` : ''}<div class="profile-feed">${own ? `<section class="card private-summary"><span class="eyebrow">Твій простір · статистику бачиш ти</span><div class="profile-metrics"><div><strong>${S.sessions.filter((s)=>s.status==='completed').length}</strong><span>Тренувань</span></div><div><strong>${S.programs.length}</strong><span>Програм</span></div><div><strong>${personalRecords(S.sessions).length}</strong><span>Рекордів</span></div></div></section>` : sharedStats()}${commentsPanel()}${own ? `<div id="measurements-view">${measurementsPanel()}</div>${recordsCard()}<div id="progress-view">${progressView()}</div><section class="card"><h2>Історія тренувань <span class="private-label">Лише для тебе</span></h2>${historyTools()}<div id="history-results">${filteredHistory()}</div></section>` : ''}</div></div></div>`;
 }
 function settings() {
   const person = S.selfPublic || {}, visibility = profileVisibility(person);
