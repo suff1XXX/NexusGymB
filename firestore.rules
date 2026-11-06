@@ -14,6 +14,21 @@ service cloud.firestore {
       return a == b || (!exists(/databases/$(database)/documents/users/$(a)/blocked/$(b))
         && !exists(/databases/$(database)/documents/users/$(b)/blocked/$(a)));
     }
+    function profileFriend(uid) {
+      let other=request.auth.uid;
+      let forward=/databases/$(database)/documents/gymBros/$(uid + '_' + other);
+      let reverse=/databases/$(database)/documents/gymBros/$(other + '_' + uid);
+      return (exists(forward) && get(forward).data.status == 'accepted' && get(forward).data.members.hasAll([uid,other]))
+        || (exists(reverse) && get(reverse).data.status == 'accepted' && get(reverse).data.members.hasAll([uid,other]));
+    }
+    function canViewProfile(uid) {
+      return verified() && (self(uid) || owner()
+        || (exists(/databases/$(database)/documents/publicProfiles/$(uid))
+          && (get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('isPrivate',false) == false || profileFriend(uid))));
+    }
+    function validCommentFormatting() {
+      return request.resource.data.get('richText','') is string && request.resource.data.get('richText','').size() <= 16000;
+    }
     function measurementNumber(data, key, minimum, maximum) {
       return !(key in data) || (data[key] is number && data[key] >= minimum && data[key] <= maximum);
     }
@@ -83,9 +98,32 @@ service cloud.firestore {
         allow update: if (self(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
           && request.resource.data.read is bool) || validNotice(uid, id);
       }
+      match /recordSettings/{id} {
+        allow read: if self(uid) && id == 'visibility';
+        allow create, update: if self(uid) && id == 'visibility'
+          && request.resource.data.keys().hasAll(['visibleKeys','revision'])
+          && request.resource.data.keys().hasOnly(['visibleKeys','revision'])
+          && request.resource.data.visibleKeys is list && request.resource.data.visibleKeys.size() <= 200
+          && request.resource.data.revision is int
+          && request.resource.data.revision == (exists(/databases/$(database)/documents/users/$(uid)/recordSettings/visibility) ? resource.data.revision + 1 : 1)
+          && getAfter(/databases/$(database)/documents/publicProfiles/$(uid)/stats/records).data.visibilityVersion == request.resource.data.revision;
+      }
       match /measurements/{id} {
         allow read, delete: if self(uid);
         allow create, update: if self(uid) && validMeasurement(id);
+      }
+      match /manualSets/{id} {
+        allow read, delete: if self(uid);
+        allow create, update: if self(uid)
+          && request.resource.data.keys().hasAll(['exercise','exerciseKey','weight','reps','date','createdAt','updatedAt'])
+          && request.resource.data.keys().hasOnly(['exercise','exerciseKey','weight','reps','date','createdAt','updatedAt'])
+          && request.resource.data.exercise is string && request.resource.data.exercise.size() > 0 && request.resource.data.exercise.size() <= 100
+          && request.resource.data.exerciseKey is string && request.resource.data.exerciseKey.size() > 0 && request.resource.data.exerciseKey.size() <= 180
+          && request.resource.data.weight is number && request.resource.data.weight >= 0 && request.resource.data.weight <= 1000
+          && request.resource.data.reps is int && request.resource.data.reps >= 1 && request.resource.data.reps <= 1000
+          && request.resource.data.date is string && request.resource.data.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+          && request.resource.data.createdAt is number && request.resource.data.createdAt >= 0
+          && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= request.resource.data.createdAt;
       }
       match /blocked/{other} {
         allow get: if self(uid) || self(other);
@@ -120,9 +158,70 @@ service cloud.firestore {
       allow get: if self(uid) || owner();
       allow list: if owner();
       allow create, update: if owner()
-        && request.resource.data.keys().hasOnly(['homeWorkouts'])
-        && request.resource.data.homeWorkouts is bool;
+        && request.resource.data.keys().hasOnly(['homeWorkouts', 'nutrition','profileCustomization'])
+        && request.resource.data.get('homeWorkouts', false) is bool
+        && request.resource.data.get('nutrition', false) is bool
+        && request.resource.data.get('profileCustomization',false) is bool;
       allow delete: if owner();
+    }
+    function nutritionAccess() {
+      return verified() && (owner() || (exists(/databases/$(database)/documents/userAccess/$(request.auth.uid))
+        && get(/databases/$(database)/documents/userAccess/$(request.auth.uid)).data.get('nutrition', false) == true));
+    }
+    function validNutritionDay(day) {
+      return day is map && day.keys().hasOnly(['meals']) && day.meals is list && day.meals.size() == 4;
+    }
+    match /nutritionPlans/{id} {
+      allow read: if nutritionAccess();
+      allow create, update: if owner()
+        && request.resource.data.keys().hasAll(['name', 'description', 'goal', 'diet', 'days', 'updatedAt'])
+        && request.resource.data.keys().hasOnly(['name', 'description', 'goal', 'diet', 'days', 'updatedAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 100
+        && request.resource.data.description is string && request.resource.data.description.size() <= 1000
+        && request.resource.data.goal in ['Загальне меню', 'Підтримання ваги', 'Зниження ваги', 'Набір маси']
+        && request.resource.data.diet in ['Звичайний раціон', 'Без риби', 'Без молочних продуктів', 'Вегетаріанський']
+        && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= 0
+        && request.resource.data.days is list && request.resource.data.days.size() == 7
+        && validNutritionDay(request.resource.data.days[0]) && validNutritionDay(request.resource.data.days[1])
+        && validNutritionDay(request.resource.data.days[2]) && validNutritionDay(request.resource.data.days[3])
+        && validNutritionDay(request.resource.data.days[4]) && validNutritionDay(request.resource.data.days[5])
+        && validNutritionDay(request.resource.data.days[6]);
+      allow delete: if owner();
+    }
+    function validNutritionInput(input) {
+      return input is map
+        && input.keys().hasAll(['goal','sex','age','height','weight','steps','workouts','adjustment','occupation','diet','basket','needsCare'])
+        && input.keys().hasOnly(['goal','sex','age','height','weight','steps','workouts','adjustment','occupation','diet','basket','needsCare'])
+        && input.goal in ['lose','maintain','gain'] && input.sex in ['male','female']
+        && input.occupation in ['seated','standing','physical']
+        && input.diet in ['regular','noFish','noDairy','vegetarian'] && input.basket in ['economy','standard','varied']
+        && input.age is int && input.age >= 18 && input.age <= 80
+        && input.height is number && input.height >= 130 && input.height <= 220
+        && input.weight is number && input.weight >= 40 && input.weight <= 200
+        && input.steps is int && input.steps >= 0 && input.steps <= 30000
+        && input.workouts is int && input.workouts >= 0 && input.workouts <= 7
+        && input.adjustment is int && input.adjustment >= 0 && input.adjustment <= 20
+        && (input.goal != 'maintain' || input.adjustment == 0)
+        && (input.goal != 'gain' || input.adjustment <= 15)
+        && input.needsCare == false;
+    }
+    match /users/{uid}/nutrition/{id} {
+      allow read: if self(uid) && nutritionAccess();
+      allow create, update: if self(uid) && nutritionAccess() && (
+        (id == 'selection'
+          && request.resource.data.keys().hasAll(['planId', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['planId', 'updatedAt'])
+          && request.resource.data.planId is string
+          && exists(/databases/$(database)/documents/nutritionPlans/$(request.resource.data.planId))
+          && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= 0)
+        || (id == 'generator'
+          && request.resource.data.keys().hasAll(['version','input','seed','updatedAt'])
+          && request.resource.data.keys().hasOnly(['version','input','seed','updatedAt'])
+          && request.resource.data.version == 1 && validNutritionInput(request.resource.data.input)
+          && request.resource.data.seed is int && request.resource.data.seed >= 0 && request.resource.data.seed <= 1000000
+          && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= 0)
+      );
+      allow delete: if self(uid);
     }
     match /settings/{id} {
       allow read: if verified();
@@ -135,28 +234,47 @@ service cloud.firestore {
     match /exercises/{id} {
       allow read: if verified();
       allow write: if owner();
+    }
+    // Reviews share validation for exercises and ready-made program templates.
+    match /{catalog}/{id} {
       match /ratings/{uid} {
-        allow read: if verified();
-        allow create, update: if self(uid)
-          && exists(/databases/$(database)/documents/exercises/$(id))
+        allow read: if verified() && catalog in ['exercises', 'programTemplates'];
+        allow create, update: if catalog in ['exercises', 'programTemplates'] && self(uid)
+          && exists(/databases/$(database)/documents/$(catalog)/$(id))
+          && request.resource.data.keys().hasAll(['score', 'updatedAt'])
           && request.resource.data.keys().hasOnly(['score', 'updatedAt'])
-          && request.resource.data.score is int
-          && request.resource.data.score >= 0 && request.resource.data.score <= 5
+          && request.resource.data.score is int && request.resource.data.score >= 1 && request.resource.data.score <= 5
           && request.resource.data.updatedAt == request.time;
-        allow delete: if self(uid) || owner();
+        allow delete: if catalog in ['exercises', 'programTemplates'] && (self(uid) || owner());
       }
       match /comments/{comment} {
-        allow read: if verified();
-        allow create: if verified()
-          && exists(/databases/$(database)/documents/exercises/$(id))
-          && request.resource.data.keys().hasOnly(['text', 'authorId', 'authorName', 'createdAt'])
+        allow read: if verified() && catalog in ['exercises', 'programTemplates'];
+        allow create: if verified() && catalog in ['exercises', 'programTemplates']
+          && exists(/databases/$(database)/documents/$(catalog)/$(id))
+          && request.resource.data.keys().hasAll(['text', 'score', 'authorId', 'authorName', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['text', 'score', 'authorId', 'authorName', 'createdAt', 'richText'])
           && request.resource.data.authorId == request.auth.uid
-          && request.resource.data.text is string
-          && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
-          && request.resource.data.authorName is string && request.resource.data.authorName.size() <= 100
+          && request.resource.data.authorName == get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data.name
+          && request.resource.data.score is int && request.resource.data.score >= 1 && request.resource.data.score <= 5
+          && getAfter(/databases/$(database)/documents/$(catalog)/$(id)/ratings/$(request.auth.uid)).data.score == request.resource.data.score
+          && validCommentFormatting()
+          && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
           && request.resource.data.createdAt == request.time;
-        allow delete: if owner() || (verified() && resource.data.authorId == request.auth.uid);
+        allow delete: if catalog in ['exercises', 'programTemplates'] && (owner() || (verified() && resource.data.authorId == request.auth.uid));
       }
+    }
+    match /{kind}/{target}/comments/{comment}/reactions/{uid} {
+      allow read: if verified() && kind in ['exercises', 'programTemplates', 'publicProfiles']
+        && (kind != 'publicProfiles' || canViewProfile(target));
+      allow create, update: if self(uid) && kind in ['exercises', 'programTemplates', 'publicProfiles']
+        && exists(/databases/$(database)/documents/$(kind)/$(target)/comments/$(comment))
+        && notBlocked(uid, get(/databases/$(database)/documents/$(kind)/$(target)/comments/$(comment)).data.authorId)
+        && (kind != 'publicProfiles' || (canViewProfile(target) && notBlocked(uid, target)))
+        && request.resource.data.keys().hasAll(['kind', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['kind', 'createdAt'])
+        && request.resource.data.kind in ['like', 'love', 'fire', 'strong', 'laugh', 'dislike', 'wow', 'adore', 'giggle', 'angry', 'thinking']
+        && request.resource.data.createdAt == request.time;
+      allow delete: if self(uid) && kind in ['exercises', 'programTemplates', 'publicProfiles'];
     }
     match /sharedPrograms/{token} {
       allow get: if verified();
@@ -170,17 +288,39 @@ service cloud.firestore {
         && request.resource.data.program is map;
       allow delete: if owner() || (verified() && resource.data.senderId == request.auth.uid);
     }
+    function customizationAccess(uid) {
+      return owner() || (exists(/databases/$(database)/documents/userAccess/$(uid)) && get(/databases/$(database)/documents/userAccess/$(uid)).data.get('profileCustomization',false) == true);
+    }
+    function validAppearance(a) {
+      return a is map && a.keys().hasAll(['mode','background','backgroundEnd','blocks','text','angle','image'])
+        && a.keys().hasOnly(['mode','background','backgroundEnd','blocks','text','angle','image'])
+        && a.mode in ['solid','gradient','dynamic','image']
+        && a.background is string && a.background.matches('#[0-9a-fA-F]{6}')
+        && a.backgroundEnd is string && a.backgroundEnd.matches('#[0-9a-fA-F]{6}')
+        && a.blocks is string && a.blocks.matches('#[0-9a-fA-F]{6}')
+        && a.text is string && a.text.matches('#[0-9a-fA-F]{6}')
+        && a.angle is int && a.angle >= 0 && a.angle <= 360
+        && a.image is string && a.image.size() <= 300000
+        && (a.image == '' || a.image.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'));
+    }
     function validPublicProfile(uid) {
       let data = request.resource.data;
       let profile = get(/databases/$(database)/documents/users/$(uid)).data;
       return data.keys().hasAll(['name', 'photo', 'customId', 'joinedAt'])
-        && data.keys().hasOnly(['name', 'photo', 'customId', 'joinedAt', 'contacts', 'visibility', 'bio', 'banner', 'location'])
+        && data.keys().hasOnly(['name', 'photo', 'customId', 'joinedAt', 'contacts', 'visibility', 'bio', 'bioRich', 'banner', 'location', 'isPrivate','appearance'])
+        && (!('appearance' in data) || data.appearance == null || validAppearance(data.appearance))
+        && ((resource == null && !('appearance' in data))
+          || (resource != null && !data.diff(resource.data).affectedKeys().hasAny(['appearance']))
+          || customizationAccess(uid))
+        && data.get('isPrivate', false) is bool
+        && (data.get('isPrivate',false) == false || getAfter(/databases/$(database)/documents/profileCards/$(uid)).data.isPrivate == true)
         && data.get('location', '') is string && data.get('location', '').size() <= 100
         && data.get('banner', '') is string && data.get('banner', '').size() <= 480000
         && (data.get('banner', '') == '' || data.banner.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'))
         && validContacts(data.get('contacts', {}))
         && validVisibility(data.get('visibility', {}))
         && data.get('bio', '') is string && data.get('bio', '').size() <= 400
+        && data.get('bioRich','') is string && data.get('bioRich','').size() <= 8000
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
         && data.photo is string && data.photo.size() <= 180000
         && (data.photo == '' || data.photo.matches('https://.*')
@@ -194,7 +334,8 @@ service cloud.firestore {
         && (contacts.get('telegram', '') == '' || contacts.telegram.matches('https://t[.]me/[A-Za-z][A-Za-z0-9_]{4,31}'));
     }
     function validVisibility(value) {
-      return value is map && value.keys().hasOnly(['lastActive', 'progress', 'records', 'streak', 'gymBros'])
+      return value is map && value.keys().hasOnly(['activity', 'workouts', 'lastActive', 'progress', 'records', 'streak', 'gymBros'])
+        && value.get('activity', false) is bool && value.get('workouts', false) is bool
         && value.get('lastActive', false) is bool && value.get('progress', false) is bool
         && value.get('records', false) is bool && value.get('streak', false) is bool && value.get('gymBros', true) is bool;
     }
@@ -207,10 +348,15 @@ service cloud.firestore {
           && getAfter(reverse).data.members.hasAll([uid, friend])));
     }
     function validUserTag(tag) {
-      return tag is map && tag.keys().hasAll(['text', 'color', 'textColor']) && tag.keys().hasOnly(['text', 'color', 'textColor'])
+      return tag is map && tag.keys().hasAll(['text', 'color', 'textColor']) && tag.keys().hasOnly(['text', 'color', 'textColor','gradient','colorEnd','angle','effect','shadow'])
         && tag.text is string && tag.text.size() > 0 && tag.text.size() <= 40
         && tag.color is string && tag.color.matches('#[0-9a-fA-F]{6}')
-        && tag.textColor is string && tag.textColor.matches('#[0-9a-fA-F]{6}');
+        && tag.textColor is string && tag.textColor.matches('#[0-9a-fA-F]{6}')
+        && tag.get('gradient',false) is bool
+        && tag.get('colorEnd','#000000') is string && tag.get('colorEnd','#000000').matches('#[0-9a-fA-F]{6}')
+        && tag.get('angle',120) is int && tag.get('angle',120) >= 0 && tag.get('angle',120) <= 360
+        && tag.get('effect','none') in ['none','shine','flow','pulse']
+        && tag.get('shadow','none') in ['none','soft','glow'];
     }
     match /userLabels/{uid} {
       allow get: if verified();
@@ -224,18 +370,51 @@ service cloud.firestore {
         && (request.resource.data.tags.size() < 5 || validUserTag(request.resource.data.tags[4]));
       allow delete: if owner();
     }
-    match /publicProfiles/{uid} {
+    match /profileCards/{uid} {
       allow get: if verified();
+      allow create, update: if self(uid)
+        && request.resource.data.keys().hasAll(['name','photo','customId','isPrivate'])
+        && request.resource.data.keys().hasOnly(['name','photo','customId','isPrivate'])
+        && request.resource.data.name == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.name
+        && request.resource.data.photo == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.photo
+        && request.resource.data.customId == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.customId
+        && request.resource.data.isPrivate == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('isPrivate',false);
+    }
+    match /publicProfiles/{uid} {
+      allow get: if canViewProfile(uid);
       allow create, update: if self(uid) && validPublicProfile(uid);
+      match /activity/{entry} {
+        allow read: if self(uid) || (canViewProfile(uid)
+          && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get('activity', false) == true);
+        allow create: if self(uid) && request.resource.data.keys().hasAll(['type', 'target', 'detail', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['type', 'target', 'detail', 'createdAt'])
+          && request.resource.data.type in ['comment', 'reply', 'rating', 'reaction']
+          && request.resource.data.target is string && request.resource.data.target.size() <= 500
+          && request.resource.data.detail is string && request.resource.data.detail.size() <= 100
+          && request.resource.data.createdAt == request.time;
+        allow delete: if self(uid);
+      }
+      match /workoutActivity/{entry} {
+        allow read: if self(uid) || (canViewProfile(uid)
+          && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get('activity', false) == true
+          && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get('workouts', false) == true);
+        allow create, update: if self(uid) && request.resource.data.keys().hasAll(['type', 'target', 'detail', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['type', 'target', 'detail', 'createdAt'])
+          && request.resource.data.type == 'workout' && request.resource.data.target == entry
+          && request.resource.data.detail is string && request.resource.data.detail.size() <= 100
+          && request.resource.data.createdAt is timestamp
+          && get(/databases/$(database)/documents/users/$(uid)/sessions/$(entry)).data.status == 'completed';
+        allow delete: if self(uid);
+      }
       match /friends/{friend} {
-        allow read: if self(uid) || self(friend) || (verified()
-          && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get('gymBros', true) == true);
+        allow read: if canViewProfile(uid) && (self(uid) || self(friend) || (verified()
+          && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get('gymBros', true) == true));
         allow create, update: if verified() && (request.auth.uid == uid || request.auth.uid == friend)
           && notBlocked(uid, friend) && acceptedPair(uid, friend) && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == friend;
         allow delete: if verified() && (request.auth.uid == uid || request.auth.uid == friend);
       }
       match /stats/{kind} {
-        allow get: if self(uid) || owner() || (verified()
+        allow get: if self(uid) || owner() || (canViewProfile(uid)
           && get(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('visibility', {}).get(kind, false) == true);
         allow create, update: if self(uid) && (
           (kind == 'lastActive' && request.resource.data.keys().hasOnly(['at']) && request.resource.data.at == request.time)
@@ -243,8 +422,10 @@ service cloud.firestore {
             && request.resource.data.workouts is int && request.resource.data.workouts >= 0
             && request.resource.data.sets is int && request.resource.data.sets >= 0
             && request.resource.data.volume is number && request.resource.data.volume >= 0)
-          || (kind == 'records' && request.resource.data.keys().hasOnly(['items'])
-            && request.resource.data.items is list && request.resource.data.items.size() <= 200)
+          || (kind == 'records' && request.resource.data.keys().hasOnly(['items','visibilityVersion'])
+            && request.resource.data.items is list && request.resource.data.items.size() <= 200
+            && (!existsAfter(/databases/$(database)/documents/users/$(uid)/recordSettings/visibility)
+              || request.resource.data.get('visibilityVersion',0) == getAfter(/databases/$(database)/documents/users/$(uid)/recordSettings/visibility).data.revision))
           || (kind == 'streak' && request.resource.data.keys().hasOnly(['current', 'best', 'trainedThisWeek', 'lastWorkoutDate'])
             && request.resource.data.current is int && request.resource.data.best is int
             && request.resource.data.current >= 0 && request.resource.data.best >= 0
@@ -252,12 +433,14 @@ service cloud.firestore {
         );
       }
       match /comments/{comment} {
-        allow read: if verified();
-        allow create: if verified()
+        allow read: if canViewProfile(uid);
+        allow create: if canViewProfile(uid)
           && notBlocked(request.auth.uid, uid)
           && exists(/databases/$(database)/documents/publicProfiles/$(uid))
           && request.resource.data.keys().hasAll(['authorId', 'authorName', 'text', 'createdAt'])
-          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'text', 'createdAt', 'parentId'])
+          && request.resource.data.keys().hasOnly(['authorId', 'authorName', 'text', 'createdAt', 'parentId', 'photo', 'richText'])
+          && request.resource.data.get('photo', '') is string && request.resource.data.get('photo', '').size() <= 480000
+          && (request.resource.data.get('photo', '') == '' || request.resource.data.photo.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'))
           && request.resource.data.get('parentId', '') is string
           && (request.resource.data.get('parentId', '') == '' || (
             exists(/databases/$(database)/documents/publicProfiles/$(uid)/comments/$(request.resource.data.parentId))
@@ -266,13 +449,14 @@ service cloud.firestore {
           ))
           && request.resource.data.authorId == request.auth.uid
           && request.resource.data.authorName == get(/databases/$(database)/documents/publicProfiles/$(request.auth.uid)).data.name
+          && validCommentFormatting()
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
           && request.resource.data.createdAt == request.time;
         allow delete: if self(uid) || owner() || (verified() && resource.data.authorId == request.auth.uid);
         match /likes/{liker} {
-          allow read: if verified();
-          allow create: if self(liker) && exists(/databases/$(database)/documents/publicProfiles/$(uid)/comments/$(comment))
+          allow read: if canViewProfile(uid);
+          allow create: if self(liker) && canViewProfile(uid) && exists(/databases/$(database)/documents/publicProfiles/$(uid)/comments/$(comment))
             && notBlocked(request.auth.uid, uid)
             && notBlocked(request.auth.uid, get(/databases/$(database)/documents/publicProfiles/$(uid)/comments/$(comment)).data.authorId)
             && request.resource.data.keys().hasOnly(['createdAt']) && request.resource.data.createdAt == request.time;
@@ -376,18 +560,20 @@ service cloud.firestore {
       allow create: if verified() && request.resource.data.reporterId == request.auth.uid
         && request.resource.data.targetId is string && request.resource.data.targetId != request.auth.uid
         && request.resource.data.keys().hasAll(['reporterId', 'targetId', 'profileId', 'commentId', 'commentText', 'reason', 'detail', 'status', 'createdAt'])
-        && request.resource.data.keys().hasOnly(['reporterId', 'targetId', 'profileId', 'commentId', 'commentText', 'reason', 'detail', 'status', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['reporterId', 'targetId', 'profileId', 'commentId', 'commentText', 'commentRichText', 'reason', 'detail', 'status', 'createdAt'])
         && request.resource.data.profileId is string && request.resource.data.commentId is string
         && request.resource.data.reason in ['abuse', 'spam', 'impersonation', 'other']
         && request.resource.data.detail is string && request.resource.data.detail.size() <= 1000
         && request.resource.data.commentText is string && request.resource.data.commentText.size() <= 2000
+        && request.resource.data.get('commentRichText','') is string && request.resource.data.get('commentRichText','').size() <= 16000
         && request.resource.data.status == 'open' && request.resource.data.createdAt == request.time
         && exists(/databases/$(database)/documents/publicProfiles/$(request.resource.data.targetId))
         && id == request.auth.uid + '_' + request.resource.data.targetId + '_' + (request.resource.data.commentId == '' ? 'profile' : request.resource.data.commentId)
-        && ((request.resource.data.commentId == '' && request.resource.data.commentText == '' && request.resource.data.profileId == request.resource.data.targetId)
+        && ((request.resource.data.commentId == '' && request.resource.data.commentText == '' && request.resource.data.get('commentRichText','') == '' && request.resource.data.profileId == request.resource.data.targetId)
           || (request.resource.data.commentId != ''
             && get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.profileId)/comments/$(request.resource.data.commentId)).data.authorId == request.resource.data.targetId
-            && get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.profileId)/comments/$(request.resource.data.commentId)).data.text == request.resource.data.commentText));
+            && get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.profileId)/comments/$(request.resource.data.commentId)).data.text == request.resource.data.commentText
+            && get(/databases/$(database)/documents/publicProfiles/$(request.resource.data.profileId)/comments/$(request.resource.data.commentId)).data.get('richText','') == request.resource.data.get('commentRichText','')));
       allow update: if owner() && request.resource.data.status in ['reviewed', 'dismissed'] && request.resource.data.reviewedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt']);
     }

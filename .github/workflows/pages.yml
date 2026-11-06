@@ -23,8 +23,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Install dependencies and run tests
-        run: npm ci && npm test
+      - name: Install dependencies and build editor
+        run: npm ci && npm run build:editor
+      - name: Run available tests
+        run: |
+          shopt -s nullglob
+          tests=(tools/*.test.mjs)
+          if ((${#tests[@]})); then node --test "${tests[@]}"; fi
       - name: Check JavaScript
         run: |
           shopt -s nullglob

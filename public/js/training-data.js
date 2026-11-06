@@ -82,12 +82,13 @@ export function progressSeries(sessions, { metric = "weight", key = "", since = 
 export function exportData(state, now = new Date()) {
   return { version: 1, exportedAt: now.toISOString(), programs: copy(state.programs),
     sessions: copy(state.sessions), exercises: copy(state.exercises.filter((e) => e.personal)),
-    exercisePreferences: copy(state.exercisePreferences), measurements: copy(state.measurements || []) };
+    exercisePreferences: copy(state.exercisePreferences), measurements: copy(state.measurements || []), manualSets: copy(state.manualSets || []) };
 }
 
 export function exportCsv(state) {
   const rows = [["Тип", "Програма / тренування", "Дата / день", "Статус", "Вправа", "Підхід", "Повторення", "Вага, кг", "Час, сек", "Відпочинок, сек", "Нотатка", "Додаткові параметри"]];
   for (const measurement of state.measurements || []) rows.push(['Заміри тіла','',measurement.date,'Приватно','','','',measurement.weight ?? '','','',measurement.note || '',JSON.stringify(Object.fromEntries(['waist','chest','hips','biceps','thigh'].filter((key)=>measurement[key] !== undefined).map((key)=>[key,measurement[key]])))]);
+  for (const entry of state.manualSets || []) rows.push(['Ручний підхід','',entry.date,'Виконано',entry.exercise,1,entry.reps,entry.weight,'','','','']);
   for (const p of state.programs) for (const d of p.days) {
     if (d.warmup) rows.push(["Розминка", p.name, d.weekday + 1, "", "", "", "", "", "", "", d.warmup]);
     if (d.description || !d.items.length) rows.push(["Програма", p.name, d.weekday + 1, "", d.name, "", "", "", "", "", d.description]);

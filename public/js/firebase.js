@@ -1,10 +1,13 @@
+import {personalRecords} from './fitness.js';
+import { reactionSummary, reactions } from './social.js';
 import { firebaseConfig, OWNER_UID } from "./config.js";
 import { loginTime, newerLogin, loginMetadata, loginIpHistory } from "./login-metadata.js";
 import { createOfflineStore, retryable, timeout } from "./offline.js";
 import { publicProfileData } from "./people.js";
-import { profileSnapshots } from "./profile-data.js";
+import { profileSnapshots, sharedRecords, recordSharingKeys } from "./profile-data.js";
 import { inviteSession } from './training-invites.js';
 import { reportData } from './community-safety.js';
+import { progressSessions } from './manual-sets.js';
 let api,
   registering = false;
 const authListeners = new Set();
@@ -28,6 +31,7 @@ export async function connect() {
   };
   const stores = new Map();
   const friendDirectories = new Set();
+  const identityLookups = new Map();
   const store = (uid = auth.currentUser?.uid) => {
     if (!uid) throw Error("Спочатку увійди в акаунт.");
     if (!stores.has(uid)) stores.set(uid, createOfflineStore(localStorage, uid));
@@ -37,6 +41,16 @@ export async function connect() {
   const notifySync = (error = "") => window.dispatchEvent(new CustomEvent("nexus-sync", { detail: { pending: auth.currentUser ? store().pending() : 0, error } }));
   const commit = async (operations) => {
     const batch = C.writeBatch(db);
+    // Keep only public identity in a separate document so closed profiles remain private.
+    const profileWrite=operations.find(op=>op.path===`publicProfiles/${auth.currentUser?.uid}` && op.kind!=='remove');
+    if(profileWrite) {
+      identityLookups.delete(auth.currentUser.uid);
+      const previous=profileWrite.kind==='save'?{}:(await C.getDocFromServer(C.doc(db,profileWrite.path))).data();
+      const profile={...previous,...profileWrite.data};
+      batch.set(C.doc(db,`profileCards/${auth.currentUser.uid}`),{
+        name:profile.name,photo:profile.photo,customId:profile.customId,isPrivate:profile.isPrivate===true,
+      });
+    }
     for (const op of operations) {
       const ref = C.doc(db, op.path);
       if (op.kind === "remove") batch.delete(ref);
@@ -86,6 +100,29 @@ export async function connect() {
           notifySync();
         }
       });
+    },
+    async toggleAccess(uid, key) {
+      requireOnline();
+      if (!['homeWorkouts','nutrition','profileCustomization'].includes(key)) throw Error('Невідомий тип доступу.');
+      const ref = C.doc(db, `userAccess/${uid}`);
+      return C.runTransaction(db, async transaction => {
+        const snapshot = await transaction.get(ref);
+        const previous = snapshot.exists() ? snapshot.data() : {};
+        const data = { homeWorkouts: previous.homeWorkouts === true, nutrition: previous.nutrition === true,profileCustomization:previous.profileCustomization===true };
+        data[key] = !data[key];
+        transaction.set(ref,data);
+        return data;
+      });
+    },
+    async saveNutritionGenerator(value) {
+      requireOnline();
+      await commit([{kind:'save',path:`users/${auth.currentUser.uid}/nutrition/generator`,data:value}]);
+    },
+    async nutritionData() {
+      requireOnline();
+      const plans = await timeout(C.getDocsFromServer(C.collection(db,'nutritionPlans')));
+      const selection = await api.getLive(`users/${auth.currentUser.uid}/nutrition/selection`);
+      return { plans: plans.docs.map(d => ({...d.data(), id:d.id})), selection };
     },
     async isOwner() {
       return auth.currentUser?.uid === OWNER_UID;
@@ -198,15 +235,27 @@ export async function connect() {
     },
     async getLive(path) {
       requireOnline();
-      const snapshot = await timeout(C.getDocFromServer(C.doc(db, path)));
-      return snapshot.exists() ? snapshot.data() : null;
+      try {
+        const snapshot = await timeout(C.getDocFromServer(C.doc(db, path)));
+        return snapshot.exists() ? snapshot.data() : null;
+      } catch(error) {
+        const match=/^publicProfiles\/([^/]+)$/.exec(path);
+        if(error.code!=='permission-denied'||!match)throw error;
+        const card=await timeout(C.getDocFromServer(C.doc(db,`profileCards/${match[1]}`)));
+        if(!card.exists())throw error;
+        return {...card.data(),restricted:true};
+      }
     },
     async ensurePublicProfile(profile) {
       requireOnline();
       const uid = auth.currentUser.uid, ref = C.doc(db, 'publicProfiles', uid);
       await C.runTransaction(db, async (t) => {
         const current = await t.get(ref);
-        if (!current.exists()) t.set(ref, publicProfileData(profile));
+        const cardRef=C.doc(db,'profileCards',uid),card=await t.get(cardRef);
+        const data=current.exists()?current.data():publicProfileData(profile);
+        if (!current.exists()) t.set(ref,data);
+        const identity={name:data.name,photo:data.photo,customId:data.customId,isPrivate:data.isPrivate===true};
+        if(!card.exists()||Object.entries(identity).some(([key,value])=>card.data()[key]!==value))t.set(cardRef,identity);
       });
       if (!friendDirectories.has(uid)) { await api.syncFriendDirectory(); friendDirectories.add(uid); }
     },
@@ -256,25 +305,110 @@ export async function connect() {
         const parent = await C.getDocFromServer(C.doc(db, `publicProfiles/${uid}/comments/${id}`));
         if (parent.exists()) comments.push({ ...parent.data(), id: parent.id });
       }
-      return Promise.all(comments.map(async (comment) => {
-        const path = `publicProfiles/${uid}/comments/${comment.id}/likes`;
-        const [count, mine] = await Promise.all([
-          C.getCountFromServer(C.collection(db, path)), C.getDocFromServer(C.doc(db, path, auth.currentUser.uid)),
-        ]);
-        return { ...comment, likeCount: count.data().count, liked: mine.exists() };
-      }));
+      return Promise.all(comments.map(async (comment) => ({ ...comment,
+        reactions: await api.commentReactions(`publicProfiles/${uid}/comments/${comment.id}`) })));
     },
-    async publishProfileStats(sessions) {
+    async publicIdentity(uid) {
+      const cached=identityLookups.get(uid);
+      if(cached && Date.now()-cached.at<30000)return cached.promise;
+      const promise=(async()=>{
+        const card=await api.getLive(`profileCards/${uid}`);
+        const person=card||await api.getLive(`publicProfiles/${uid}`);
+        return {name:person?.name||'Спортсмен',photo:person?.photo||'',customId:person?.customId||null};
+      })();
+      identityLookups.set(uid,{at:Date.now(),promise});
+      try{return await promise;}catch(error){identityLookups.delete(uid);throw error;}
+    },
+    async commentReactions(path) {
+      const entries = await api.list(`${path}/reactions`);
+      if (path.startsWith('publicProfiles/')) {
+        const legacy = await api.list(`${path}/likes`);
+        entries.push(...legacy.filter(like => !entries.some(entry => entry.id === like.id)).map(like => ({ ...like, kind: 'love' })));
+      }
+      const decorated=await Promise.all(entries.map(async entry=>{
+        const person=await api.publicIdentity(entry.id);
+        return {...entry,authorName:person?.name||'Спортсмен',authorPhoto:person?.photo||''};
+      }));
+      return reactionSummary(decorated, auth.currentUser.uid);
+    },
+    async reactToComment(path, kind) {
+      requireOnline();
+      if (!Object.hasOwn(reactions,kind) || !/^(exercises|programTemplates|publicProfiles)\/[^/]+\/comments\/[^/]+$/.test(path)) throw Error('Невідома реакція.');
+      const ref = C.doc(db, `${path}/reactions/${auth.currentUser.uid}`);
+      let added = false;
+      await C.runTransaction(db, async transaction => {
+        const current = await transaction.get(ref);
+        const legacyRef = path.startsWith('publicProfiles/') ? C.doc(db, `${path}/likes/${auth.currentUser.uid}`) : null;
+        const legacy = legacyRef ? await transaction.get(legacyRef) : null;
+        const previousKind = current.exists() ? current.data().kind : legacy?.exists() ? 'love' : '';
+        added = previousKind !== kind;
+        if (legacy?.exists()) transaction.delete(legacyRef);
+        if (added) transaction.set(ref, { kind, createdAt: C.serverTimestamp() });
+        else transaction.delete(ref);
+      });
+      if (added) await api.recordActivity('reaction', path, kind);
+    },
+    async recordActivity(type, target, detail = '') {
+      try {
+        await api.save(`publicProfiles/${auth.currentUser.uid}/activity/${crypto.randomUUID()}`, {
+          type, target, detail: String(detail).slice(0, 100), createdAt: C.serverTimestamp(),
+        });
+      } catch (error) { console.warn('Не вдалося записати активність:', error.code || error.message); }
+    },
+    async recentActivity(uid, workouts = false) {
+      requireOnline();
+      const path = `publicProfiles/${uid}/${workouts ? 'workoutActivity' : 'activity'}`;
+      const q = C.query(C.collection(db, path), C.orderBy('createdAt', 'desc'), C.limit(30));
+      return (await timeout(C.getDocsFromServer(q))).docs.map(d => ({ ...d.data(), id: d.id }));
+    },
+    async setRecordVisibility(key, visible, sessions, manualSets = []) {
+      requireOnline();
+      const uid=auth.currentUser.uid,records=personalRecords(progressSessions(sessions,manualSets));
+      if(!records.some(record=>record.key===key)||typeof visible!=='boolean')throw Error('Рекорд уже недоступний. Онови профіль.');
+      const preferenceRef=C.doc(db,`users/${uid}/recordSettings/visibility`),profileRef=C.doc(db,`publicProfiles/${uid}`);
+      return C.runTransaction(db,async transaction=>{
+        const [preferenceSnapshot,profileSnapshot]=await Promise.all([transaction.get(preferenceRef),transaction.get(profileRef)]);
+        if(!profileSnapshot.exists())throw Error('Спочатку онови профіль.');
+        const profile=profileSnapshot.data(),previous=preferenceSnapshot.exists()?preferenceSnapshot.data():null;
+        const keys=new Set(recordSharingKeys(records,previous,profile.visibility?.records===true));
+        if(visible)keys.add(key);else keys.delete(key);
+        if(keys.size>200)throw Error('Можна показувати до 200 рекордів. Спочатку приховай один із вибраних.');
+        const preference={visibleKeys:[...keys],revision:(previous?.revision||0)+1};
+        const visibility={...(profile.visibility||{}),...(visible?{records:true}:{})};
+        transaction.set(preferenceRef,preference);
+        transaction.set(C.doc(db,`publicProfiles/${uid}/stats/records`),{items:sharedRecords(records,preference),visibilityVersion:preference.revision});
+        if(visible&&profile.visibility?.records!==true)transaction.update(profileRef,{visibility});
+        return {preference,visibility};
+      });
+    },
+    async publishProfileStats(sessions, manualSets = []) {
       requireOnline();
       const uid = auth.currentUser.uid;
-      await commit(Object.entries(profileSnapshots(sessions)).map(([kind, data]) => ({ kind: 'save', path: `publicProfiles/${uid}/stats/${kind}`, data })));
+      await C.runTransaction(db,async transaction=>{
+        const preference=await transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`));
+        const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets);
+        for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
+      });
+      const completed = sessions.filter(s => s.status === 'completed').sort((a,b) => String(b.date).localeCompare(String(a.date))).slice(0,30);
+      const existing = await api.list(`publicProfiles/${uid}/workoutActivity`);
+      const operations = existing.filter(e => !completed.some(s => s.id === e.id)).map(e => ({ kind: 'remove', path: `publicProfiles/${uid}/workoutActivity/${e.id}` }));
+      for (const session of completed) {
+        const detail = String(session.name || 'Тренування').slice(0,100);
+        const createdAt = new Date(session.endedAt || session.updatedAt || session.date);
+        const previous = existing.find(entry => entry.id === session.id);
+        if (previous?.detail === detail && previous.createdAt?.toMillis?.() === createdAt.getTime()) continue;
+        operations.push({ kind: 'save', path: `publicProfiles/${uid}/workoutActivity/${session.id}`,
+          data: { type: 'workout', target: session.id, detail, createdAt } });
+      }
+      if (operations.length) await commit(operations);
+
     },
-    async addProfileComment(uid, text, parentId = '') {
+    async addProfileComment(uid, text, parentId = '', photo = '', richText = '') {
       requireOnline();
       const author = await api.getLive(`publicProfiles/${auth.currentUser.uid}`);
       const id = crypto.randomUUID();
       const operations = [{ kind: 'save', path: `publicProfiles/${uid}/comments/${id}`,
-        data: { authorId: auth.currentUser.uid, authorName: author.name, text, parentId, createdAt: C.serverTimestamp() } }];
+        data: { authorId: auth.currentUser.uid, authorName: author.name, text, parentId, photo, ...(richText?{richText}:{}), createdAt: C.serverTimestamp() } }];
       if (uid !== auth.currentUser.uid) operations.push(notice(uid, 'comment', id, uid));
       if (parentId) {
         const parent = await api.getLive(`publicProfiles/${uid}/comments/${parentId}`);
@@ -282,6 +416,7 @@ export async function connect() {
         if (parent.authorId !== uid && parent.authorId !== auth.currentUser.uid) operations.push(notice(parent.authorId, 'reply', id, uid));
       }
       await commit(operations);
+      await api.recordActivity(parentId ? 'reply' : 'comment', `publicProfiles/${uid}/comments/${id}`);
       return id;
     },
     async toggleCommentLike(uid, id, liked) {
@@ -349,7 +484,7 @@ export async function connect() {
       return C.runTransaction(db, async (t) => {
         if ((await t.get(ref)).exists()) return false;
         t.set(ref, { ...data, reporterId, targetId, profileId, commentId: commentId || '',
-          commentText: source?.text || '', status: 'open', createdAt: C.serverTimestamp() });
+          commentText: source?.text || '', ...(source?.richText?{commentRichText:source.richText}:{}), status: 'open', createdAt: C.serverTimestamp() });
         return true;
       });
     },

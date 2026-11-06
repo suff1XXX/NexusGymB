@@ -2,7 +2,7 @@
 <html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Відкриваємо профіль — Nexus GymB</title>
 <script>
   const route = /^(.*?\/)(?:public\/)?u\/([1-9][0-9]{0,11})\/?$/.exec(location.pathname);
-  const legacy = /^(.*?\/)public\/(?:(index|home|program|profile|settings|workout|editor|exercises|admin)\.html)?$/.exec(location.pathname);
+  const legacy = /^(.*?\/)public\/(?:(index|home|program|profile|settings|workout|editor|exercises|nutrition|admin)\.html)?$/.exec(location.pathname);
   if (route) {
     const query = new URLSearchParams(location.search);
     query.set('number', route[2]);

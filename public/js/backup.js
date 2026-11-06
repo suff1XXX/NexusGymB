@@ -3,6 +3,7 @@ import { exerciseData } from "./import.js";
 import { performanceData } from "./performance.js";
 import { validSession } from "./history.js";
 import { measurementData } from './body-measurements.js';
+import { manualSetData } from './manual-sets.js';
 
 export function parseBackup(text) {
   if (text.length > 15000000) throw Error("Резервна копія завелика. Максимум 15 МБ.");
@@ -37,13 +38,20 @@ export function parseBackup(text) {
     if (record.id !== value.date) throw Error('Некоректний ID запису замірів.');
     return { id:value.date,...value };
   });
-  return { programs, sessions, exercises, preferences, measurements };
+  const rawManualSets=data.manualSets??[];
+  if(!Array.isArray(rawManualSets)||rawManualSets.length>5000||!unique(rawManualSets))throw Error('Некоректні ручні підходи в резервній копії.');
+  const manualSets=rawManualSets.map(record=>{
+    if(!validId(record.id))throw Error('Некоректний ID ручного підходу.');
+    const value=manualSetData(record,new Date(`${record.date}T23:59:59`));
+    return {id:record.id,...value,createdAt:Number(record.createdAt)||0,updatedAt:Number(record.updatedAt)||Number(record.createdAt)||0};
+  });
+  return { programs, sessions, exercises, preferences, measurements, manualSets };
 }
 
 export function backupEntries(backup, state, uid) {
   const entries = [], skipped = [];
   const current = { programs: state.programs, sessions: state.sessions, exercises: state.exercises.filter((e) => e.personal).map((e) => ({ id: e.id.slice(9) })),
-    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })), measurements: state.measurements || [] };
+    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })), measurements: state.measurements || [], manualSets:state.manualSets||[] };
   for (const [collection, list] of Object.entries(backup)) for (const record of list) {
     if (current[collection].some((r) => r.id === record.id) || collection === 'sessions' && record.status === 'active' && state.sessions.some((s) => s.status === 'active')) {
       skipped.push(record); continue;

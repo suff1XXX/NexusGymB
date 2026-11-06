@@ -7,14 +7,27 @@
     "test:browser": "node tools/browser-check.mjs",
     "test:rules": "firebase emulators:exec --only firestore --project demo-nexus-gymb \"node tools/rules-check.mjs\"",
     "start": "node tools/preview.mjs",
-    "serve": "node tools/preview.mjs"
+    "serve": "node tools/preview.mjs",
+    "build:editor": "esbuild public/js/rich-editor.js --bundle --format=esm --target=es2022 --minify --legal-comments=inline --outfile=public/js/rich-editor.bundle.js",
+    "pretest:browser": "npm run build:editor",
+    "prestart": "npm run build:editor"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",
+    "esbuild": "^0.28.2",
     "firebase": "^11.10.0",
     "playwright": "^1.65.0"
   },
   "overrides": {
     "@grpc/grpc-js": "^1.13.6"
+  },
+  "dependencies": {
+    "@tiptap/core": "^3.33.0",
+    "@tiptap/extension-table": "^3.33.0",
+    "@tiptap/extension-text-align": "^3.33.0",
+    "@tiptap/extension-text-style": "^3.33.0",
+    "@tiptap/pm": "^3.33.0",
+    "@tiptap/starter-kit": "^3.33.0",
+    "dompurify": "^3.4.17"
   }
 }

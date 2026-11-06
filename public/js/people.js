@@ -30,6 +30,7 @@ export function bannerSource(value) {
 }
 export const prepareAvatar = (file, crop) => prepareProfileImage(file, 256, 256, 180000, crop);
 export const prepareBanner = (file, crop) => prepareProfileImage(file, 1200, 320, 480000, crop);
+export const prepareProfileBackground = file => prepareProfileImage(file,1440,1080,300000);
 async function prepareProfileImage(file, width, height, maxLength, crop) {
   if (!file || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 10000000)
     throw Error('Обери JPG, PNG або WebP розміром до 10 МБ.');

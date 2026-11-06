@@ -1,0 +1,11 @@
+export const appearanceDefaults={mode:'solid',background:'#edf2ff',backgroundEnd:'#e3f5ed',blocks:'#ffffff',text:'#202534',angle:135,image:''};
+export function profileAppearance(value={}) {
+  const data={...appearanceDefaults,...value};
+  if(!['solid','gradient','dynamic','image'].includes(data.mode)||!['background','backgroundEnd','blocks','text'].every(key=>/^#[0-9a-fA-F]{6}$/.test(data[key]))||!Number.isInteger(data.angle)||data.angle<0||data.angle>360||typeof data.image!=='string'||data.image.length>300000||(data.image&&!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data.image)))throw Error('Перевір кольори та фонове зображення.');
+  return Object.fromEntries(Object.keys(appearanceDefaults).map(key=>[key,data[key]]));
+}
+export function appearanceStyle(value) {
+  const a=profileAppearance(value);
+  const bg=a.mode==='image'&&a.image?`url('${a.image}')`:['gradient','dynamic'].includes(a.mode)?`linear-gradient(${a.angle}deg,${a.background},${a.backgroundEnd},${a.background})`:a.background;
+  return `--profile-background:${bg};--panel:${a.blocks};--text:${a.text};--muted:color-mix(in srgb,${a.text} 68%,${a.blocks});--bg:${a.blocks};--soft:color-mix(in srgb,${a.blocks} 88%,${a.text});--line:color-mix(in srgb,${a.text} 18%,${a.blocks});`;
+}
