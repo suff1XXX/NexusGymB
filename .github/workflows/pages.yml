@@ -21,6 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check JavaScript
         run: |
+          shopt -s nullglob
           for file in public/js/*.js tools/*.mjs; do node --check "$file"; done
       - name: Check public files for private credentials
         run: |
