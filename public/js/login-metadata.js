@@ -23,6 +23,18 @@ export function newerLogin(profile, time) {
   const previous = Date.parse(profile.lastLoginTime || "");
   return !!time && (!Number.isFinite(previous) || Date.parse(time) > previous);
 }
+export function loginIpHistory(profile, metadata = null) {
+  const valid = (entry) => entry && typeof entry.ip === 'string' && entry.ip.length <= 45 &&
+    /^[0-9a-fA-F:.]+$/.test(entry.ip) && typeof entry.time === 'string' && Number.isFinite(Date.parse(entry.time));
+  const entries = Array.isArray(profile.loginIpHistory) ? profile.loginIpHistory.filter(valid) : [];
+  const legacy = { ip: profile.lastLoginIp, time: profile.lastLoginTime };
+  if (valid(legacy)) entries.push(legacy);
+  const next = metadata && { ip: metadata.lastLoginIp, time: metadata.lastLoginTime };
+  if (valid(next)) entries.push(next);
+  // One record per sign-in, even if several tabs observe the same authentication event.
+  return [...new Map(entries.map((entry) => [entry.time, { ip: entry.ip, time: entry.time }])).values()]
+    .sort((a, b) => Date.parse(b.time) - Date.parse(a.time)).slice(0, 5);
+}
 
 export async function loginMetadata(time) {
   const lastDeviceId = deviceId();

@@ -1,0 +1,8 @@
+{
+  "indexes": [{
+    "collectionGroup": "gymBros",
+    "queryScope": "COLLECTION",
+    "fields": [{ "fieldPath": "members", "arrayConfig": "CONTAINS" }, { "fieldPath": "status", "order": "ASCENDING" }]
+  }],
+  "fieldOverrides": []
+}

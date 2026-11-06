@@ -1,6 +1,12 @@
 {
   "firestore": {
-    "rules": "firestore.rules"
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
   },
-  "emulators": { "firestore": { "port": 8085 }, "ui": { "enabled": false }, "singleProjectMode": true }
+  "emulators": { "firestore": { "port": 8085 }, "ui": { "enabled": false }, "singleProjectMode": true },
+  "hosting": {
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "/u/**", "destination": "/profile.html" }, { "source": "/public/u/**", "destination": "/profile.html" }]
+  }
 }

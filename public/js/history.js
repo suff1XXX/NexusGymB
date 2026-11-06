@@ -11,10 +11,12 @@ export function undoLastSet(session) {
 
 export function validSession(s) {
   if (!s || !['planned', 'active', 'completed'].includes(s.status) || typeof s.programId !== 'string' ||
+      (s.warmup !== undefined && (typeof s.warmup !== 'string' || s.warmup.length > 2000)) ||
+      ['endedEarly', 'warmupDone', 'warmupSkipped'].some((key) => s[key] !== undefined && typeof s[key] !== 'boolean') ||
       (s.description !== undefined && (typeof s.description !== 'string' || s.description.length > 4000)) ||
       !validProgram({ name: s.name, type: "Власна програма", days: [{ weekday: 0, name: s.name, groups: "", description: s.description || "", items: s.items }] }) ||
       typeof s.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s.date) || localDate(new Date(`${s.date}T12:00:00`)) !== s.date ||
-      !Array.isArray(s.logs) || !Array.isArray(s.skipped) || s.logs.length > 600 ||
+      !Array.isArray(s.logs) || !Array.isArray(s.skipped) || s.logs.length > 1200 ||
       !Number.isInteger(s.index) || s.index < 0 || s.index > s.items.length ||
       !['startedAt','endedAt','restEnd','timerEnd'].every((key) => Number.isFinite(s[key]) && s[key] >= 0)) return false;
   if (s.status === 'active' && s.items.length && s.index >= s.items.length ||
@@ -26,9 +28,11 @@ export function validSession(s) {
     if (!item || !Number.isInteger(l.index) || !Number.isInteger(l.reps) || l.reps < 0 || l.reps > 1000 ||
         !Number.isFinite(l.weight) || l.weight < 0 || l.weight > 1000 ||
         (l.seconds !== undefined && (!Number.isFinite(l.seconds) || l.seconds < 0 || l.seconds > 7200)) ||
+        (l.warmup !== undefined && typeof l.warmup !== 'boolean') ||
         !validMetrics(l.metrics)) return false;
-    counts.set(l.index, (counts.get(l.index) || 0) + 1);
-    return counts.get(l.index) <= item.sets;
+    const key = `${l.index}:${l.warmup ? 'warmup' : 'working'}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+    return counts.get(key) <= (l.warmup ? 20 : item.sets);
   });
 }
 

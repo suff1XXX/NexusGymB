@@ -10,6 +10,18 @@ import { expiredTimers, createTimerSound } from "./notifications.js";
 import { activityMillis, createActivityTracker } from "./activity.js";
 import { shareableProgram, shareToken, programShareURL } from "./sharing.js";
 import { connect } from "./firebase.js";
+import { trainingStreak, personalRecords, previousWorkingSet, memberDays } from "./fitness.js";
+import { avatarSource, prepareAvatar, prepareBanner, bannerSource, contactURL } from "./people.js";
+import { loginIpHistory } from "./login-metadata.js";
+import { profileVisibility, commentThreads } from "./profile-data.js";
+import { appBase, profileNumber, profileURL } from "./routes.js";
+import { tagData } from "./user-tags.js";
+import { saveSetDraft, loadSetDraft, clearSetDraft } from './workout-recovery.js';
+import { invitePlan } from './training-invites.js';
+import { drawProfileCrop } from './profile-image-editor.js';
+import { reportReasons } from './community-safety.js';
+import { workoutSummary } from './workout-summary.js';
+import { measurementData, measurementFields, measurementSeries } from './body-measurements.js';
 import {
   days,
   dayCodes,
@@ -27,6 +39,7 @@ import {
   newSession,
   validProgram,
   completeSet,
+  workingSetCount,
   advance,
   validMetrics,
   setPlan,
@@ -35,9 +48,13 @@ import {
   startPlannedSession,
   hasWorkoutContent,
   completeTextSession,
+  finishEarly,
 } from "./model.js";
 const root = document.querySelector("#app"),
   modal = document.querySelector("#modal");
+const requestedCalendar = new URLSearchParams(location.search).get('date') || '';
+const initialCalendarDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedCalendar) && Number.isFinite(Date.parse(requestedCalendar))
+  && localDate(new Date(`${requestedCalendar}T12:00:00`)) === requestedCalendar ? requestedCalendar : localDate();
 const S = {
   isOwner: false,
   homeAccess: false,
@@ -46,6 +63,11 @@ const S = {
   profile: null,
   programs: [],
   sessions: [],
+  measurements: [],
+  measurementsError: '',
+  measurementMetric: 'weight',
+  measurementPeriod: '90',
+  summaryId: new URLSearchParams(location.search).get('summary') || '',
   exercises: [],
   exercisePreferences: {},
   favoritesOnly: false,
@@ -61,8 +83,8 @@ const S = {
   catalogScope: "all",
   adminCatalog: { filter: "Усі", query: "", equipment: "", catalogSort: "name", withPhoto: false, favoritesOnly: false, catalogScope: "shared", archive: "all" },
   loaded: false,
-  calendarMonth: localDate().slice(0, 7),
-  calendarDate: localDate(),
+  calendarMonth: initialCalendarDate.slice(0, 7),
+  calendarDate: initialCalendarDate,
   progressMetric: "weight",
   progressExercise: "",
   progressPeriod: "90",
@@ -70,6 +92,16 @@ const S = {
   timerSound: true,
   timerVibration: false,
   syncError: "",
+  people: null,
+  selfPublic: null,
+  notices: [],
+  noticeError: '',
+  settingsSection: 'user',
+  blocked: [],
+  blockedProfiles: {},
+  reports: [],
+  invites: [],
+  reportProfiles: {},
 };
 let db,
   editor,
@@ -91,6 +123,8 @@ let db,
 let editorDraftKey = "", draftRestored = false, draftStored = false;
 let restoreDraft = null;
 let incomingShare = null;
+let stopNotices = null, replyingTo = null;
+let imageEdit = null;
 const activity = createActivityTracker({
   send: (uid) => db?.markActive?.(uid) ?? false,
   userId: () => S.loaded && S.user?.emailVerified ? S.user.uid : "",
@@ -98,7 +132,13 @@ const activity = createActivityTracker({
   visible: () => document.visibilityState === "visible",
 });
 const requestedShare = () => shareToken(new URLSearchParams(location.search).get("share"));
-const shareQuery = () => requestedShare() ? `?share=${encodeURIComponent(requestedShare())}` : "";
+const requestedProfileNumber = () => profileNumber(location.pathname) || (/^[1-9][0-9]{0,11}$/.test(new URLSearchParams(location.search).get('number') || '') ? new URLSearchParams(location.search).get('number') : '');
+const shareQuery = () => {
+  const query = new URLSearchParams();
+  if (requestedShare()) query.set('share', requestedShare());
+  if (requestedProfileNumber()) query.set('number', requestedProfileNumber());
+  return query.size ? `?${query}` : '';
+};
 const timerSound = createTimerSound(), notifiedTimers = new Set();
 const esc = (v) =>
   String(v ?? "").replace(
@@ -121,6 +161,7 @@ const paths = {
     <circle cx="12" cy="8" r="4" />
     <path d="M4 21v-2a8 8 0 0 1 16 0v2" />
   `,
+  settings: `<circle cx="12" cy="12" r="8" /><path d="M12 1v4m0 14v4M1 12h4m14 0h4M4 4l3 3m10 10 3 3M4 20l3-3M17 7l3-3" />`,
   sun: `
     <circle cx="12" cy="12" r="4" />
     <path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1" />
@@ -293,6 +334,7 @@ const pageFiles = {
   program: "program.html",
   exercises: "exercises.html",
   profile: "profile.html",
+  settings: "settings.html",
   admin: "admin.html",
   editor: "editor.html",
   session: "workout.html",
@@ -316,7 +358,7 @@ async function navigate(page, query = "") {
     await animation.finished.catch(() => {});
   }
 
-  window.location.assign(pageFiles[page] + query);
+  window.location.assign(new URL(pageFiles[page] + query, appBase).href);
 }
 function prepareEditor(restore = true) {
   const q = new URLSearchParams(location.search);
@@ -353,7 +395,7 @@ function prepareEditor(restore = true) {
     plannedDate = session?.date || (q.get("date") >= localDate() ? q.get("date") : localDate());
     editor = id && !session ? null : { ...(session ? { id: session.id } : {}),
       name: session?.name || "Окреме тренування", type: "Власна програма",
-      days: [{ weekday: 0, name: "Тренування", groups: "", description: session?.description || "", items: copy(session?.items || []) }] };
+      days: [{ weekday: 0, name: "Тренування", groups: "", description: session?.description || "", warmup: session?.warmup || "", items: copy(session?.items || []) }] };
     if (q.get("repeat")) {
       const source = S.sessions.find((s) => s.id === q.get("repeat"));
       editor = source?.status === "completed" ? repeatProgram(source) : null;
@@ -408,7 +450,7 @@ function safeURL(value) {
   }
 }
 function avatar() {
-  const u = safeURL(S.user?.photoURL);
+  const u = avatarSource(S.profile?.photo || S.user?.photoURL);
   return u
     ? `
         <img class="avatar" src="${esc(u)}" alt="" />
@@ -473,7 +515,7 @@ function shell(content) {
       <div class="header-inner">
         <button type="button" class="brand" data-action="route" data-id="home">Nexus GymB</button>
         <nav class="topnav" aria-label="Основна навігація">${nav()}</nav>
-        <button
+        <div class="header-account"><button class="notice-bell" type="button" data-action="open-notices" aria-label="Сповіщення"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg><span id="notice-count" class="notice-count" hidden></span></button><button type="button" class="header-settings ${S.route === 'settings' ? 'active' : ''}" data-action="route" data-id="settings" aria-label="Налаштування" title="Налаштування" ${S.route === 'settings' ? 'aria-current="page"' : ''}>${icon('settings')}</button><button
           type="button"
           class="userchip ${S.route === "profile" ? "active" : ""}"
           data-action="route"
@@ -486,15 +528,17 @@ function shell(content) {
             <span class="userchip-name">${esc(S.user.displayName || "Спортсмен")}</span>
             <span class="userchip-id">ID ${esc(S.profile?.customId || "…")}</span>
           </span>
-        </button>
+        </button></div>
       </div>
     </header>
     <main class="main">
       <div id="offline">${syncNotice()}</div>
+      ${resumeReminder()}
       ${content}
     </main>
   `;
   previousScrollY = Math.max(0, window.scrollY || 0);
+  updateNoticeBadge();
 }
 
 let previousScrollY = Math.max(0, window.scrollY || 0);
@@ -551,7 +595,7 @@ function render() {
     return;
   }
   if (authPages.includes(currentPage)) {
-    navigate(requestedShare() ? "program" : "home", shareQuery());
+    navigate(requestedProfileNumber() ? 'profile' : requestedShare() ? "program" : "home", shareQuery());
     return;
   }
   if (!S.loaded) {
@@ -573,11 +617,13 @@ function render() {
     program: programs,
     exercises: catalog,
     profile,
+    settings,
     admin,
     editor: programEditor,
     session: sessionView,
   };
   shell((screens[S.route] || home)());
+  restoreSetInputs();
 }
 
 function heading(title, desc = "", actions = "") {
@@ -649,7 +695,9 @@ function exerciseRows(items) {
     .join("");
 }
 function workoutDescription(day) {
-  return day?.description ? `<div class="notice workout-description">${esc(day.description)}</div>` : "";
+  return (day?.scheduledTime || day?.invitationNote ? `<div class="notice"><strong>Спільне тренування${day.scheduledTime ? ` · ${esc(day.scheduledTime)}` : ''}</strong>${day.invitationNote ? `<p>${esc(day.invitationNote)}</p>` : ''}</div>` : '') +
+    (day?.warmup ? `<div class="notice workout-description"><strong>Розминка${day.warmupSkipped ? " · пропущено" : day.warmupDone ? " · виконано" : ""}</strong><p>${esc(day.warmup)}</p></div>` : "") +
+    (day?.description ? `<div class="notice workout-description">${esc(day.description)}</div>` : "");
 }
 function home() {
   const p = active(),
@@ -659,7 +707,7 @@ function home() {
     session = ongoing(),
     completed = S.sessions.filter((s) => s.status === "completed");
   return (
-    heading(`Привіт, ${esc(S.user.displayName?.split(" ")[0] || "спортсмене")} 👋`, "", owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") +
+    heading(`Привіт, ${esc(S.user.displayName?.split(" ")[0] || "спортсмене")} 👋`, "", owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") + streakCard() +
     (S.settings.announcement
       ? `
           <div class="notice">${esc(S.settings.announcement)}</div>
@@ -829,6 +877,7 @@ function history(list) {
               </div>
               ${btn("Повторити тренування", "repeat-history", `data-id="${esc(s.id)}"`, "ghost")}
               ${btn("Виправити", "edit-history", `data-id="${esc(s.id)}"`, "ghost")}
+              ${btn('Підсумок','show-workout-summary',`data-id="${esc(s.id)}"`,'ghost')}
             </div>
           `,
         )
@@ -862,7 +911,7 @@ function programs() {
                         </p>
                       </div>
                       <div class="actions">
-                        ${btn("Редагувати", "edit-program", `data-id="${p.id}"`, "secondary")}${btn("Поділитися", "share-program", `data-id="${p.id}"`, "ghost")}${btn(
+                        ${btn("Почати тренування", "choose-program-day", `data-id="${esc(p.id)}"`)}${btn("Редагувати", "edit-program", `data-id="${p.id}"`, "secondary")}${btn("Поділитися", "share-program", `data-id="${p.id}"`, "ghost")}${btn(
                           "Копіювати",
                           "copy-program",
                           `data-id="${p.id}"`,
@@ -1212,6 +1261,9 @@ function programEditor() {
                       'required maxlength="100"',
                     )}
                   </div>
+                  <label>Розминка перед тренуванням <span class="small muted">Необов’язково. Залиш порожнім, якщо не хочеш її записувати.</span>
+                    <textarea name="warmup-${n}" rows="3" maxlength="2000" placeholder="Наприклад: 5 хв ходьби, оберти плечима, легкі присідання">${esc(d.warmup || "")}</textarea>
+                  </label>
                   <label>Тренування своїми словами <span class="small muted">Необов’язково вибирати вправи з каталогу. Можна залишити лише опис.</span>
                     <textarea name="description-${n}" rows="4" maxlength="4000" placeholder="Наприклад: 30 хв прогулянки, розтяжка та легка розминка">${esc(d.description || "")}</textarea>
                   </label>
@@ -1392,6 +1444,7 @@ function collectEditor() {
     d.name = editor.scope === "home" ? editor.name : v.get(`dayname-${n}`);
     d.groups = v.get(`groups-${n}`);
     d.description = String(v.get(`description-${n}`) || "");
+    d.warmup = String(v.get(`warmup-${n}`) || "").trim();
     d.items.forEach((i, j) => {
       if (i.custom) i.name = String(v.get(`customname-${n}-${j}`) || "").trim();
       for (const k of ["sets", "reps", "seconds", "weight", "rest", "note"])
@@ -1417,9 +1470,14 @@ function collectEditor() {
   });
   persistEditorDraft();
 }
+function setLogLabel(logs, position) {
+  const log = logs[position];
+  const number = logs.slice(0, position + 1).filter((l) => l.index === log.index && !!l.warmup === !!log.warmup).length;
+  return `${log.warmup ? "Розминочний підхід" : "Робочий підхід"} ${number}`;
+}
 function previousWorkout(item, session) {
   const previous = previousResults(S.sessions, item, session.id);
-  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k) => `<p class="small">Підхід ${k + 1}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
+  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
 }
 function progressView() {
   const items = new Map();
@@ -1490,48 +1548,296 @@ function historyEditForm(s) {
     ${field("Назва", "name", s.name, "text", 'required maxlength="100"')}
     <div class="formgrid">${field("Дата", "date", s.date, "date", `required max="${localDate()}"`)}${field("Тривалість, хв", "minutes", Math.round((s.endedAt - s.startedAt) / 60000), "number", 'required min="0" max="1440"')}</div>
     <label>Опис<textarea name="description" rows="3" maxlength="4000">${esc(s.description || "")}</textarea></label>
-    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · підхід ${s.logs.slice(0, k + 1).filter((v) => v.index === l.index).length}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага, кг", `log-weight-${k}`, l.weight, "number", 'required min="0" max="1000" step="0.5"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
+    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · ${setLogLabel(s.logs, k)}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага, кг", `log-weight-${k}`, l.weight, "number", 'required min="0" max="1000" step="0.5"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
     <div class="actions"><button type="submit" class="btn">Зберегти виправлення</button>${btn("Скасувати", "close", 'type="button"', "ghost")}</div><div class="form-error" role="alert"></div></form>`);
 }
 function restorePreview() {
   const { entries, skipped } = backupEntries(restoreDraft, S, S.user.uid);
-  openModal(`<h2>Відновити резервну копію</h2><p>Програм: ${restoreDraft.programs.length}, тренувань: ${restoreDraft.sessions.length}, особистих вправ: ${restoreDraft.exercises.length}.</p><p>Буде додано записів: ${entries.length}. Пропущено наявних записів або активних тренувань: ${skipped.length}.</p><p class="muted">Поточні дані залишаються. Записи з однаковими ID пропускаються.</p><div class="actions">${btn("Відновити", "confirm-restore", entries.length ? "" : "disabled")}${btn("Скасувати", "close", "", "ghost")}</div>`);
+  openModal(`<h2>Відновити резервну копію</h2><p>Програм: ${restoreDraft.programs.length}, тренувань: ${restoreDraft.sessions.length}, особистих вправ: ${restoreDraft.exercises.length}, записів замірів: ${restoreDraft.measurements?.length || 0}.</p><p>Буде додано записів: ${entries.length}. Пропущено наявних записів або активних тренувань: ${skipped.length}.</p><p class="muted">Поточні дані залишаються. Записи з однаковими ID пропускаються.</p><div class="actions">${btn("Відновити", "confirm-restore", entries.length ? "" : "disabled")}${btn("Скасувати", "close", "", "ghost")}</div>`);
+}
+function streakCard() {
+  const streak = trainingStreak(S.sessions);
+  return `<section class="streak-card" aria-label="Серія тренувань"><span class="streak-flame" aria-hidden="true">🔥</span><div><strong>${streak.current} тиж. поспіль</strong></div></section>`;
+}
+function recordsCard(records = personalRecords(S.sessions)) {
+  return `<section class="card"><h2>🏆 Особисті рекорди</h2><p class="small muted">Найкраща робоча вага та повторення з нею у завершених тренуваннях.</p>${records.length ? records.map((r) => `<div class="record-row"><strong>${esc(r.name)}</strong><span>${r.weight} кг × ${r.reps}<small>${esc(r.date)}</small></span></div>`).join("") : '<p class="muted">Збережи перше тренування з робочими підходами — тут з’являться твої рекорди.</p>'}</section>`;
+}
+const profileUid = () => {
+  if (requestedProfileNumber()) return S.people?.uid || null;
+  const uid = new URLSearchParams(location.search).get('uid');
+  return uid && /^[A-Za-z0-9_-]{1,128}$/.test(uid) ? uid : S.user?.uid;
+};
+function personAvatar(person) {
+  const photo = avatarSource(person?.photo);
+  return photo ? `<img class="avatar" src="${esc(photo)}" alt="Аватар" loading="lazy" />` : `<span class="avatar">${esc(person?.name?.[0] || 'G')}</span>`;
+}
+async function loadPeople() {
+  let uid = profileUid();
+  const userId = S.user.uid;
+  try {
+    if (!navigator.onLine) throw Error('Профілі Gym Bro та коментарі доступні з інтернетом.');
+    await db.ensurePublicProfile(S.profile);
+    if (requestedProfileNumber()) {
+      const number = await db.getLive(`userNumbers/${requestedProfileNumber()}`);
+      if (!number) throw Error('Користувача з таким ID не знайдено.');
+      uid = number.uid;
+    }
+    const [person, relations, comments, labels, block] = await Promise.all([
+      db.getLive(`publicProfiles/${uid}`), db.gymBros(), db.profileComments(uid), db.getLive(`userLabels/${uid}`), db.blockStatus(uid),
+    ]);
+    const publicFriends = uid === userId ? relations.filter((r)=>r.status === 'accepted')
+      : profileVisibility(person).gymBros ? await db.publicGymBros(uid) : [];
+    const publicPeers = publicFriends.map((r)=>r.from === uid ? r.to : r.from);
+    const peers = [...new Set([...publicPeers, ...relations.map((r) => r.from === userId ? r.to : r.from), ...comments.map((c) => c.authorId)])];
+    const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await db.getLive(`publicProfiles/${id}`)])));
+    const stats = {};
+    if (uid !== userId && person) await Promise.all(Object.entries(profileVisibility(person)).map(async ([key, visible]) => {
+      if (visible && key !== 'gymBros') try { stats[key] = await db.getLive(`publicProfiles/${uid}/stats/${key}`); }
+      catch (error) { if (error.code !== 'permission-denied') throw error; }
+    }));
+    if (S.user?.uid !== userId) return;
+    S.people = { uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], error: '' };
+    if (uid === userId) S.selfPublic = person;
+  } catch (error) {
+    if (S.user?.uid === userId) S.people = { uid, error: err(error) };
+  }
+}
+function friendButtons(uid) {
+  if (uid === S.people?.uid && S.people.block?.iBlocked) return btn('Розблокувати','unblock-person',`data-id="${esc(uid)}"`,'secondary');
+  if (uid === S.people?.uid && S.people.block?.blockedMe) return '<span class="small muted">Взаємодія недоступна</span>';
+  const relation = S.people?.relations?.find((r) => r.members.includes(uid));
+  if (!relation) return btn('＋ Додати в Gym Bro', 'friend-request', `data-id="${esc(uid)}"`);
+  if (relation.status === 'accepted') return `<span class="badge">🤝 Gym Bro</span>${btn('Прибрати з друзів', 'friend-remove', `data-id="${esc(relation.id)}"`, 'ghost')}`;
+  if (relation.to === S.user.uid) return `${btn('Прийняти Gym Bro', 'friend-accept', `data-id="${esc(relation.id)}"`)}${btn('Відхилити', 'friend-remove', `data-id="${esc(relation.id)}"`, 'ghost')}`;
+  return `<span class="small muted">Заявку надіслано</span>${btn('Скасувати заявку', 'friend-remove', `data-id="${esc(relation.id)}"`, 'ghost')}`;
+}
+function commentMarkup(comment, reply = false) {
+  if (comment.deleted) return '<p class="small muted">Коментар видалено</p>';
+  const person = S.people.profiles[comment.authorId] || { name: comment.authorName };
+  const canDelete = S.people.uid === S.user.uid || owner() || comment.authorId === S.user.uid;
+  const canInteract = !S.people.block?.iBlocked && !S.people.block?.blockedMe && !S.blocked.some((b)=>b.id === comment.authorId);
+  return `<article class="comment-card ${reply ? 'is-reply' : ''}" id="comment-${esc(comment.id)}"><button class="comment-avatar" data-action="view-person" data-id="${esc(comment.authorId)}" aria-label="Відкрити профіль ${esc(person.name)}">${personAvatar(person)}</button><div class="comment-body"><div class="comment-meta"><button class="person-link" data-action="view-person" data-id="${esc(comment.authorId)}">${esc(person.name || comment.authorName)}</button><time>${displayDate(comment.createdAt)}</time></div><p>${esc(comment.text)}</p><div class="comment-actions">${canInteract ? `<button class="comment-heart ${comment.liked ? 'is-liked' : ''}" data-action="like-profile-comment" data-id="${esc(comment.id)}" aria-label="Подобається" aria-pressed="${!!comment.liked}"><span aria-hidden="true">${comment.liked ? '♥' : '♡'}</span> ${comment.likeCount || 0}</button>${btn('Відповісти', 'reply-profile-comment', `data-id="${esc(comment.id)}"`, 'ghost')}` : ''}${canDelete ? btn('Видалити', 'delete-profile-comment', `data-id="${esc(comment.id)}"`, 'ghost') : ''}${comment.authorId !== S.user.uid ? btn('Поскаржитися','report-comment',`data-id="${esc(comment.id)}"`,'ghost') : ''}</div></div></article>`;
+}
+function commentsPanel() {
+  const view = S.people;
+  if (!view?.person || view.error) return '';
+  const target = replyingTo && view.comments.find((c)=>c.id === replyingTo);
+  return `<section class="card profile-comments"><div class="sectionhead"><h2>Коментарі</h2></div>${view.block?.iBlocked || view.block?.blockedMe ? '<p class="muted">Коментування недоступне.</p>' : `<form id="profile-comment-form">${personAvatar(S.selfPublic || S.profile)}<div class="comment-compose">${target ? `<div class="reply-target"><span>Відповідь для ${esc(target.authorName)}</span>${btn('Скасувати відповідь','cancel-comment-reply','type="button"','ghost')}</div>` : ''}<label class="comment-input"><span class="visually-hidden">${target ? 'Відповідь на коментар' : 'Написати коментар'}</span><textarea name="comment" maxlength="2000" rows="3" required placeholder="${target ? 'Написати відповідь…' : 'Написати коментар…'}"></textarea></label><button class="btn" type="submit">${target ? 'Надіслати відповідь' : 'Надіслати'}</button><div class="form-error" role="alert"></div></div></form>`}<div class="profile-comment-list">${commentThreads(view.comments).map((c)=>`<div class="comment-thread">${commentMarkup(c)}${c.replies.length ? `<div class="comment-replies">${c.replies.map((r)=>commentMarkup(r,true)).join('')}</div>` : ''}</div>`).join('') || '<p class="muted">Коментарів ще немає — будьте першим!</p>'}</div></section>`;
+}
+function resumeReminder() {
+  const session = S.loaded && ongoing();
+  if (!session || ['session','home','editor'].includes(S.route)) return '';
+  return `<section class="resume-reminder"><div><strong>Незавершене тренування: ${esc(session.name)}</strong><p class="small muted">${session.logs.length} записаних підходів · ${esc(session.date)}</p></div>${btn('Продовжити тренування','resume','','secondary')}</section>`;
+}
+function captureSetInputs() {
+  const form = document.querySelector('#set-form'), session = ongoing();
+  if (!form || !session || !S.user) return;
+  try { saveSetDraft(localStorage, S.user.uid, session, Object.fromEntries(new FormData(form))); }
+  catch { toast('Не вдалося зберегти введені значення на цьому пристрої.'); }
+}
+function restoreSetInputs() {
+  const form = document.querySelector('#set-form'), session = ongoing();
+  if (!form || !session) return;
+  const fields = loadSetDraft(localStorage, S.user.uid, session);
+  if (fields) for (const [key,value] of Object.entries(fields)) if (form.elements[key]) form.elements[key].value = value;
+}
+async function loadSafety() {
+  S.blocked = await db.blockedUsers();
+  S.blockedProfiles = Object.fromEntries(await Promise.all(S.blocked.map(async (b)=>[b.id, await db.getLive(`publicProfiles/${b.id}`)])));
+}
+function blockedPanel() {
+  return `<section class="card"><h2>Заблоковані користувачі</h2><p class="small muted">Вони не можуть коментувати твій профіль, відповідати тобі чи надсилати заявки й запрошення. Блокування прибирає дружбу.</p>${S.blocked.map((b)=>`<div class="gym-bro-row">${personAvatar(S.blockedProfiles[b.id])}<strong class="grow">${esc(S.blockedProfiles[b.id]?.name || 'Спортсмен')}</strong>${btn('Розблокувати','unblock-person',`data-id="${esc(b.id)}"`,'secondary')}</div>`).join('') || '<p class="muted">Немає заблокованих користувачів.</p>'}</section>`;
+}
+function personActions(uid) {
+  const blocked = S.blocked.some((b)=>b.id === uid);
+  openModal(`<div class="sectionhead"><h2>Дії з користувачем</h2>${btn('Закрити','close','','ghost')}</div><div class="stack">${blocked ? btn('Розблокувати','unblock-person',`data-id="${esc(uid)}"`,'secondary') : btn('Заблокувати','block-person',`data-id="${esc(uid)}"`,'secondary')}${btn('Поскаржитися','report-person',`data-id="${esc(uid)}"`,'ghost')}</div>`);
+}
+function reportDialog(targetId, commentId = '') {
+  openModal(`<div class="sectionhead"><h2 id="report-title">Поскаржитися</h2>${btn('Закрити','close','','ghost')}</div><form id="report-form" data-target="${esc(targetId)}" data-comment="${esc(commentId)}" data-profile="${esc(S.people?.uid || targetId)}"><label>Причина<select name="reason">${Object.entries(reportReasons).map(([key,label])=>`<option value="${key}">${label}</option>`).join('')}</select></label><label>Подробиці<textarea name="detail" rows="4" maxlength="1000" placeholder="Що сталося?"></textarea></label><p class="small muted">Скаргу бачить лише власник застосунку.</p><button type="submit" class="btn">Надіслати скаргу</button><div class="form-error" role="alert"></div></form>`,'report-title');
+}
+function reportsPanel() {
+  return `<section class="card"><div class="sectionhead"><h2>Скарги користувачів</h2>${btn('Завантажити скарги','load-reports','','secondary')}</div><div id="admin-reports">${S.reports.map((r)=>`<article class="moderation-report"><div class="row wrap"><strong>${esc(S.reportProfiles[r.reporterId]?.name || r.reporterId)} → ${esc(S.reportProfiles[r.targetId]?.name || r.targetId)}</strong><span class="badge">${r.status === 'open' ? 'Нова' : r.status === 'reviewed' ? 'Розглянуто' : 'Відхилено'}</span></div><p class="small muted">${esc(reportReasons[r.reason])} · ${displayDate(r.createdAt)}</p>${r.commentText ? `<blockquote>${esc(r.commentText)}</blockquote>` : ''}${r.detail ? `<p>${esc(r.detail)}</p>` : ''}<div class="actions">${btn('Профіль','view-person',`data-id="${esc(r.targetId)}"`,'ghost')}${r.commentId ? btn('Коментар','open-report-comment',`data-id="${esc(r.id)}"`,'ghost') : ''}${r.status === 'open' ? btn('Розглянуто','review-report',`data-id="${esc(r.id)}" data-status="reviewed"`,'secondary')+btn('Відхилити','review-report',`data-id="${esc(r.id)}" data-status="dismissed"`,'ghost') : ''}</div></article>`).join('') || '<p class="muted">Натисни «Завантажити скарги», щоб перевірити звернення.</p>'}</div></section>`;
+}
+function focusCommentComposer() {
+  const draft = document.querySelector('#profile-comment-form textarea')?.value || '';
+  render();
+  const input = document.querySelector('#profile-comment-form textarea');
+  if (input) { input.value = draft; input.focus(); input.closest('form').scrollIntoView({ block: 'center' }); }
+}
+function peoplePanel() {
+  const view = S.people;
+  if (!view) return '<section class="card"><p>Завантажуємо профіль…</p></section>';
+  if (view.error) return `<section class="card"><h2>Профіль</h2><p class="error">${esc(view.error)}</p>${btn('Оновити','refresh-people','','secondary')}</section>`;
+  if (!view.person) return '<section class="card"><p>Профіль ще не доступний.</p></section>';
+  if (view.uid !== S.user.uid && !profileVisibility(view.person).gymBros) return '';
+  const friends = view.publicFriends || [];
+  return `<section class="card gym-bro-card"><button class="gym-bro-heading" data-action="open-gym-bros"><h2>Gym Bro <span>${friends.length}</span></h2><span aria-hidden="true">›</span></button><div class="gym-bro-strip">${friends.slice(0,4).map((r)=>{
+    const uid = r.from === view.uid ? r.to : r.from, person = view.profiles[uid];
+    return `<button class="gym-bro-tile" data-action="view-person" data-id="${esc(uid)}" aria-label="Профіль ${esc(person?.name || 'спортсмена')}">${personAvatar(person)}<span>${esc(person?.name || 'Спортсмен')}</span></button>`;
+  }).join('') || '<p class="muted small">Ще немає Gym Bro</p>'}</div></section>`;
+}
+function gymBroDirectory() {
+  const view = S.people, own = view.uid === S.user.uid;
+  const pending = own ? view.relations.filter((r)=>r.status === 'pending') : [];
+  const list = (relations, requests = false) => relations.map((r)=>{
+    const uid = r.from === view.uid ? r.to : r.from, person = view.profiles[uid];
+    return `<div class="gym-bro-row"><button class="comment-avatar" data-action="view-person" data-id="${esc(uid)}" aria-label="Профіль ${esc(person?.name || 'спортсмена')}">${personAvatar(person)}</button><div class="grow"><button class="person-link" data-action="view-person" data-id="${esc(uid)}">${esc(person?.name || 'Спортсмен')}</button>${requests ? `<p class="small muted">${r.to === S.user.uid ? 'Вхідна заявка' : 'Заявку надіслано'}</p>` : ''}</div>${own ? `<div class="actions">${friendButtons(uid)}${r.status === 'accepted' ? btn('Запросити на тренування','invite-workout',`data-id="${esc(uid)}"`,'secondary') : ''}</div>` : ''}</div>`;
+  }).join('');
+  openModal(`<div class="sectionhead"><h2 id="gym-bro-title">Gym Bro · ${view.publicFriends.length}</h2>${btn('Закрити','close','','ghost')}</div>${own ? `<form id="find-person-form"><label>Знайти за ID<input name="number" inputmode="numeric" pattern="[0-9]+" required maxlength="12" placeholder="ID користувача" /></label><button class="btn secondary" type="submit">Відкрити профіль</button><div class="form-error" role="alert"></div></form>` : ''}${pending.length ? `<h3 class="people-subtitle">Заявки</h3>${list(pending,true)}` : ''}<div class="gym-bro-directory">${list(view.publicFriends) || '<p class="muted">Ще немає Gym Bro</p>'}</div>${own && S.invites.length ? `<h3 class="people-subtitle">Спільні тренування</h3>${S.invites.map((invite)=>`<div class="gym-bro-row"><div class="grow"><strong>${esc(invite.program.name)}</strong><p class="small muted">${esc(invite.date)}${invite.time ? ` · ${esc(invite.time)}` : ''} · ${{pending:'Очікує відповіді',accepted:'Прийнято',declined:'Відхилено',cancelled:'Скасовано'}[invite.status]}</p></div>${btn('Переглянути','view-training-invite',`data-id="${esc(invite.id)}"`,'secondary')}</div>`).join('')}` : ''}`, 'gym-bro-title');
+}
+function contactLinks(person) {
+  return `<div class="contact-links">${['instagram', 'telegram'].map((network) => {
+    try {
+      const url = contactURL(network, person?.contacts?.[network]);
+      return url ? `<a class="contact-link ${network}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${network === 'instagram' ? 'Instagram' : 'Telegram'} <span>↗</span></a>` : '';
+    } catch { return ''; }
+  }).join('')}</div>`;
+}
+function contactsEditor() {
+  if (!S.people?.person || S.people.error) return '';
+  const contacts = S.people.person.contacts || {};
+  return `<section class="card"><h2>Зв’язатися зі мною</h2><p class="muted small">Ці посилання бачитимуть інші користувачі у твоєму профілі. Поля необов’язкові.</p>${contactLinks(S.people.person)}
+    <form id="contacts-form"><div class="formgrid"><label>Instagram<input name="instagram" maxlength="200" placeholder="@username або посилання" value="${esc(contacts.instagram || '')}" /></label><label>Telegram<input name="telegram" maxlength="200" placeholder="@username або посилання" value="${esc(contacts.telegram || '')}" /></label></div><p class="small muted">Очисть поле й збережи, щоб прибрати контакт.</p><button class="btn secondary" type="submit">Зберегти контакти</button><div class="form-error" role="alert"></div></form></section>`;
+}
+function profileTagMarkup(tags) {
+  return `<div class="profile-tags">${(tags || []).map((tag)=>{
+    try { const value = tagData([tag])[0]; return `<span class="user-tag" style="--tag-bg:${value.color};--tag-fg:${value.textColor}">${esc(value.text)}</span>`; } catch { return ''; }
+  }).join('')}</div>`;
+}
+function profileHero(person, own) {
+  const banner = bannerSource(person.banner);
+  const streak = own ? trainingStreak(S.sessions).current : visibleProfileStreak(S.people?.stats?.streak);
+  return `<section class="profile-hero"><div class="profile-cover">${banner ? `<img class="profile-banner" src="${esc(banner)}" alt="Банер профілю" />` : ''}</div><div class="profile-identity"><div class="profile-portrait">${personAvatar(person)}</div><div class="profile-title">${profileTagMarkup(S.people?.tags)}<div class="profile-identity-meta"><span class="profile-location">${person.location ? `⌖ ${esc(person.location)} · ` : ''}#${esc(person.customId || '…')}</span>${streak !== null ? `<span class="profile-streak" aria-label="Серія тренувань">🔥 ${streak} тиж. поспіль</span>` : ''}</div><h1>${esc(person.name || S.user.displayName)}</h1><p class="profile-membership"><span aria-hidden="true">◷</span> З нами ${memberDays(person.joinedAt || person.createdAt)} дн.</p>${person.bio ? `<p class="profile-bio">${esc(person.bio)}</p>` : ''}${contactLinks(person)}</div><div class="profile-identity-actions">${own ? btn('Копіювати посилання','copy-profile-link','','secondary') : friendButtons(S.people.uid)+btn('⋯','person-actions',`data-id="${esc(S.people.uid)}" aria-label="Дії з користувачем"`,'ghost')}</div></div></section>`;
+}
+function visibleProfileStreak(streak) {
+  if (!streak) return null;
+  const day = streak.lastWorkoutDate;
+  const weeksOld = day ? Math.floor((Date.parse(localDate()+'T00:00:00Z') - Date.parse(day+'T00:00:00Z') + ((new Date(day+'T00:00:00Z').getUTCDay()+6)%7)*86400000) / (7*86400000)) : 99;
+  return weeksOld <= 1 ? streak.current : 0;
+}
+function sharedStats() {
+  const stats = S.people?.stats || {};
+  return `${stats.lastActive?.at ? `<section class="card activity-card"><span class="activity-dot"></span><div><span class="small muted">Остання активність</span><strong>${displayDate(stats.lastActive.at)}</strong></div></section>` : ''}${stats.progress ? `<section class="card"><span class="eyebrow">Прогрес спортсмена</span><div class="profile-metrics"><div><strong>${stats.progress.workouts}</strong><span>Тренувань</span></div><div><strong>${stats.progress.sets}</strong><span>Підходів</span></div><div><strong>${Math.round(stats.progress.volume)}</strong><span>кг загалом</span></div></div></section>` : ''}${stats.records ? recordsCard(stats.records.items || []) : ''}`;
 }
 function profile() {
-  return (
-    heading("Твій профіль", "Особистий простір і збережений прогрес.") +
-    `
-      <div class="profile">
-        <section class="card">
-          <div class="row wrap">
-            <div class="row">
-              ${avatar()}
-              <div>
-                <h2 style="margin:0 0 7px">${esc(S.user.displayName)}</h2>
-                <span class="muted">${esc(S.user.email || "")}</span>
-              </div>
-            </div>
-            ${btn("Вийти", "logout", "", "ghost")}
-          </div>
-          <div class="member-id">
-            <span>Твій ID</span>
-            <strong>#${esc(S.profile?.customId || "…")}</strong>
-          </div>
-        </section>
-        <div id="progress-view">${progressView()}</div>
-        <section class="card"><h2>Вигляд</h2><label>Тема<select id="theme-select">${options(["Світла", "Темна", "Системна"], themePreference)}</select></label></section>
-        <section class="card"><h2>Сповіщення таймера</h2>${soundControls()}</section>
-        <section class="card"><h2>Експорт даних</h2><p class="muted small">JSON містить програми, всі тренування, особисті вправи та їхні налаштування. CSV містить плани програм, заплановані тренування й виконані підходи.</p><div class="actions">${btn("Завантажити JSON", "export-json", "", "secondary")}${btn("Завантажити CSV", "export-csv", "", "secondary")}</div></section>
-        <section class="card"><h2>Відновлення з JSON</h2><p class="muted small">Обери резервну копію, яку завантажив із профілю. Перед збереженням буде показано кількість записів.</p><form id="restore-form"><label>Резервна копія JSON<input type="file" id="restore-file" accept=".json,application/json" required /></label><button class="btn secondary" type="submit">Перевірити копію</button><div class="form-error" role="alert"></div></form></section>
-        <section class="card">
-          <h2>Історія тренувань</h2>
-          ${historyTools()}<div id="history-results">${filteredHistory()}</div>
-        </section>
-      </div>
-    `
-  );
+  if (!S.people?.person || S.people.error) return heading('Профіль спортсмена') + peoplePanel();
+  const own = S.people.uid === S.user.uid, person = S.people.person;
+  const showFriends = own || profileVisibility(person).gymBros;
+  return `<div class="athlete-profile">${profileHero(person, own)}<div class="profile-columns ${showFriends ? '' : 'no-sidebar'}">${showFriends ? `<aside class="profile-sidebar">${peoplePanel()}</aside>` : ''}<div class="profile-feed">${own ? `<section class="card private-summary"><span class="eyebrow">Твій простір · статистику бачиш ти</span><div class="profile-metrics"><div><strong>${S.sessions.filter((s)=>s.status==='completed').length}</strong><span>Тренувань</span></div><div><strong>${S.programs.length}</strong><span>Програм</span></div><div><strong>${personalRecords(S.sessions).length}</strong><span>Рекордів</span></div></div></section>` : sharedStats()}${commentsPanel()}${own ? `<div id="measurements-view">${measurementsPanel()}</div>${recordsCard()}<div id="progress-view">${progressView()}</div><section class="card"><h2>Історія тренувань <span class="private-label">Лише для тебе</span></h2>${historyTools()}<div id="history-results">${filteredHistory()}</div></section>` : ''}</div></div></div>`;
 }
+function settings() {
+  const person = S.selfPublic || {}, visibility = profileVisibility(person);
+  return heading('Налаштування', 'Профіль, приватність і твій застосунок.', btn('До профілю', 'route', 'data-id="profile"', 'secondary')) + `<div class="settings-layout"><nav class="settings-sections" aria-label="Розділи налаштувань">${[['user','Користувач'],['privacy','Конфіденційність'],['security','Безпека']].map(([key,label])=>btn(label,'settings-section',`data-section="${key}" aria-pressed="${S.settingsSection === key}"`,'ghost')).join('')}</nav><div data-settings-section="user" ${S.settingsSection === 'user' ? '' : 'hidden'}><section class="card"><div class="sectionhead"><h2>Твій профіль</h2>${personAvatar(person)}</div><form id="location-form"><label>Місцеположення<input name="location" value="${esc(person.location || '')}" maxlength="100" placeholder="" /></label><p class="small muted">Відображається у профілі. Залиш порожнім, щоб не вказувати.</p><button class="btn secondary" type="submit">Зберегти місцеположення</button><div class="form-error" role="alert"></div></form><form id="bio-form"><label>Про себе<textarea name="bio" rows="3" maxlength="400" placeholder="Кілька слів про тебе й твою мету">${esc(person.bio || '')}</textarea></label><button class="btn secondary" type="submit">Зберегти опис</button><div class="form-error" role="alert"></div></form><form id="avatar-form"><label>Аватар<input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Фото буде обрізано до квадрата.</p><button type="submit" class="btn secondary">Завантажити аватар</button><div class="form-error" role="alert"></div></form><form id="banner-form"><h3>Банер профілю</h3>${bannerSource(person.banner) ? `<img class="banner-preview" src="${esc(person.banner)}" alt="Твій банер" />` : ''}<label>Зображення банера<input name="banner" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Широкий формат 1200 × 320.</p><div class="actions"><button type="submit" class="btn secondary">Завантажити банер</button>${person.banner ? btn('Прибрати банер','remove-banner','type="button"','ghost') : ''}</div><div class="form-error" role="alert"></div></form></section>${contactsEditor()}        <section class="card"><h2>Вигляд</h2><label>Тема<select id="theme-select">${options(["Світла", "Темна", "Системна"], themePreference)}</select></label></section>
+        <section class="card"><h2>Сповіщення таймера</h2>${soundControls()}</section>
+</div><div data-settings-section="privacy" ${S.settingsSection === 'privacy' ? '' : 'hidden'}><section class="card"><h2>Що бачать інші</h2><p class="muted small">Обирай, чим ділитися у профілі. Приховані дані доступні тобі в особистому просторі.</p><form id="visibility-form">${[['lastActive','Остання активність','Коли ти востаннє користувався застосунком'],['progress','Прогрес','Кількість тренувань, підходів і загальна вага'],['records','Особисті рекорди','Твої найкращі робочі результати'],['streak','Серія тренувань','Кількість тижнів поспіль'],['gymBros','Gym Bro','Показувати список твоїх друзів у профілі']].map(([key,title,description])=>`<label class="visibility-row"><div><strong>${title}</strong><span>${description}</span></div><input type="checkbox" name="${key}" ${visibility[key] ? 'checked' : ''} /></label>`).join('')}<button class="btn" type="submit">Зберегти видимість</button><div class="form-error" role="alert"></div></form></section>${blockedPanel()}
+</div><div data-settings-section="security" ${S.settingsSection === 'security' ? '' : 'hidden'}><section class="card"><h2>Безпека акаунта</h2><p class="muted">${esc(S.user.email)}</p><dl class="user-facts"><div><dt>Останній вхід</dt><dd>${displayDate(S.profile?.lastLoginTime)}</dd></div></dl><p class="small muted">Для зміни пароля надішлемо лист на твою пошту.</p>${btn('Змінити пароль','account-password-reset','','secondary')}</section>        <section class="card"><h2>Експорт даних</h2><p class="muted small">JSON містить програми, тренування, особисті вправи, налаштування та приватні заміри тіла. CSV містить плани програм, заплановані тренування й виконані підходи.</p><div class="actions">${btn("Завантажити JSON", "export-json", "", "secondary")}${btn("Завантажити CSV", "export-csv", "", "secondary")}</div></section>
+        <section class="card"><h2>Відновлення з JSON</h2><p class="muted small">Обери резервну копію, яку завантажив із профілю. Перед збереженням буде показано кількість записів.</p><form id="restore-form"><label>Резервна копія JSON<input type="file" id="restore-file" accept=".json,application/json" required /></label><button class="btn secondary" type="submit">Перевірити копію</button><div class="form-error" role="alert"></div></form></section>
+<section class="card"><h2>Акаунт</h2><p class="muted">${esc(S.user.email)}</p>${btn('Вийти', 'logout', '', 'ghost')}</section></div></div>`;
+}
+function inviteWorkoutDialog(uid) {
+  const programs = S.programs.filter((p)=>p.scope !== 'home' && !p.archived && p.days.some(hasWorkoutContent));
+  if (!programs.length) { openModal(`<h2>Запрошення на тренування</h2><p>Спочатку створи основну програму з тренувальним днем.</p>${btn('До програм','route','data-id="program"','secondary')}`); return; }
+  const person = S.people?.profiles?.[uid];
+  openModal(`<div class="sectionhead"><h2 id="invite-title">Тренування з ${esc(person?.name || 'Gym Bro')}</h2>${btn('Закрити','close','','ghost')}</div><form id="training-invite-form" data-to="${esc(uid)}"><label>Програма<select name="program" id="invite-program">${programs.map((p)=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label><label>День програми<select name="day" id="invite-day"></select></label><div class="formgrid"><label>Дата<input name="date" type="date" min="${localDate()}" value="${localDate()}" required /></label><label>Час · необов’язково<input name="time" type="time" /></label></div><label>Примітка<textarea name="note" rows="2" maxlength="300" placeholder="Де зустрічаємося?"></textarea></label><p class="small muted">Тренування з’явиться у твоєму календарі одразу, у Gym Bro — після прийняття.</p><button type="submit" class="btn">Надіслати запрошення</button><div class="form-error" role="alert"></div></form>`,'invite-title');
+  updateInviteDays();
+}
+function updateInviteDays() {
+  const form = modal.querySelector('#training-invite-form'); if (!form) return;
+  const program = S.programs.find((p)=>p.id === form.elements.program.value);
+  form.elements.day.innerHTML = (program?.days || []).filter(hasWorkoutContent).map((d)=>`<option value="${d.weekday}">${esc(d.name)}</option>`).join('');
+}
+async function openTrainingInvite(id) {
+  const invite = await db.getLive(`trainingInvites/${id}`);
+  if (!invite) throw Error('Запрошення недоступне.');
+  const sender = await db.getLive(`publicProfiles/${invite.from}`);
+  const status = { pending:'Очікує відповіді',accepted:'Прийнято',declined:'Відхилено',cancelled:'Скасовано' }[invite.status];
+  const block = await db.blockStatus(invite.from === S.user.uid ? invite.to : invite.from);
+  openModal(`<div class="sectionhead"><h2 id="training-invite-title">Запрошення на тренування</h2>${btn('Закрити','close','','ghost')}</div><p class="small muted">${esc(sender?.name || 'Gym Bro')} · ${status}</p><h3>${esc(invite.program.name)}</h3><p>${esc(invite.date)}${invite.time ? ` · ${esc(invite.time)}` : ''}</p>${invite.note ? `<div class="notice">${esc(invite.note)}</div>` : ''}${invite.program.days.map((d)=>`<section><h3>${esc(d.name)}</h3>${workoutDescription(d)}${exerciseRows(d.items)}</section>`).join('')}<div class="actions">${invite.status === 'pending' && invite.to === S.user.uid && !block.iBlocked && !block.blockedMe && invite.date >= localDate() ? btn('Прийняти й запланувати','respond-training-invite',`data-id="${esc(id)}" data-status="accepted"`) : ''}${invite.status === 'pending' && invite.to === S.user.uid ? btn('Відхилити','respond-training-invite',`data-id="${esc(id)}" data-status="declined"`,'ghost') : ''}${invite.status === 'pending' && invite.from === S.user.uid ? btn('Скасувати запрошення','respond-training-invite',`data-id="${esc(id)}" data-status="cancelled"`,'ghost') : ''}${invite.status === 'accepted' || invite.from === S.user.uid ? btn('Відкрити календар','invite-calendar',`data-date="${esc(invite.date)}"`,'secondary') : ''}</div>${invite.date < localDate() && invite.status === 'pending' ? '<p class="muted">Дата запрошення вже минула.</p>' : ''}`,'training-invite-title');
+}
+function disposeImageEdit() { imageEdit?.bitmap.close(); imageEdit = null; }
+async function openImageCropper(file, kind) {
+  if (!file || !['image/jpeg','image/png','image/webp'].includes(file.type) || file.size > 10000000) throw Error('Обери JPG, PNG або WebP до 10 МБ.');
+  disposeImageEdit();
+  const bitmap = await createImageBitmap(file).catch(()=>{ throw Error('Не вдалося прочитати зображення.'); });
+  imageEdit = { file, bitmap, kind, crop: { x:0.5,y:0.5,zoom:1 } };
+  openModal(`<div class="sectionhead"><h2 id="image-edit-title">${kind === 'avatar' ? 'Аватар' : 'Банер'} · попередній перегляд</h2>${btn('Закрити','close','','ghost')}</div><div class="image-crop-preview ${kind}"><canvas id="profile-image-canvas" aria-label="Область зображення, яка буде збережена"></canvas></div><p class="small muted">Перетягни зображення або скористайся повзунками. Прозорий фон зберігається.</p><div class="crop-controls"><label>Масштаб<input data-crop="zoom" type="range" min="1" max="3" step="0.01" value="1" /></label><label>По горизонталі<input data-crop="x" type="range" min="0" max="1" step="0.01" value="0.5" /></label><label>По вертикалі<input data-crop="y" type="range" min="0" max="1" step="0.01" value="0.5" /></label></div>${btn(kind === 'avatar' ? 'Зберегти аватар' : 'Зберегти банер','save-profile-image','','wide')}<div class="form-error" role="alert"></div>`,'image-edit-title','image-edit-dialog');
+  const canvas = modal.querySelector('canvas');
+  let drag;
+  canvas.addEventListener('pointerdown',(event)=>{
+    const rect = drawProfileCrop(canvas, bitmap, kind, imageEdit.crop);
+    drag = { pointer:event.pointerId,x:event.clientX,y:event.clientY,crop:{...imageEdit.crop},rect };
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove',(event)=>{
+    if (!drag || !imageEdit || drag.pointer !== event.pointerId) return;
+    const bounds=canvas.getBoundingClientRect(), clamp=(v)=>Math.max(0,Math.min(1,v));
+    const dx=bitmap.width-drag.rect.width, dy=bitmap.height-drag.rect.height;
+    imageEdit.crop.x=dx > 0 ? clamp(drag.crop.x-(event.clientX-drag.x)/bounds.width*drag.rect.width/dx) : 0.5;
+    imageEdit.crop.y=dy > 0 ? clamp(drag.crop.y-(event.clientY-drag.y)/bounds.height*drag.rect.height/dy) : 0.5;
+    for (const key of ['x','y']) modal.querySelector(`[data-crop="${key}"]`).value=imageEdit.crop[key];
+    updateImageCrop();
+  });
+  canvas.addEventListener('pointerup',()=>{drag=null;}); canvas.addEventListener('pointercancel',()=>{drag=null;});
+  updateImageCrop();
+}
+function updateImageCrop() {
+  if (!imageEdit) return;
+  const canvas=modal.querySelector('#profile-image-canvas'); if (!canvas) return;
+  drawProfileCrop(canvas,imageEdit.bitmap,imageEdit.kind,imageEdit.crop);
+}
+async function openPerson(uid, commentId = '') {
+  const person = uid === S.user.uid ? S.selfPublic : S.people?.profiles?.[uid] || await db.getLive(`publicProfiles/${uid}`);
+  if (!person?.customId) throw Error('Профіль ще не доступний.');
+  location.assign(profileURL(person.customId) + (commentId ? `#comment-${encodeURIComponent(commentId)}` : ''));
+}
+function updateNoticeBadge() {
+  const badge = document.querySelector('#notice-count');
+  const count = S.notices.filter((n) => !n.read).length;
+  if (badge) { badge.hidden = count === 0; badge.textContent = count > 99 ? '99+' : count; }
+  document.querySelector('.notice-bell')?.setAttribute('aria-label', count ? `Сповіщення: ${count} непрочитаних` : 'Сповіщення');
+}
+function noticeInbox() {
+  const labels = { comment: 'залишив(-ла) коментар у твоєму профілі', reply: 'відповів(-ла) на твій коментар', friend_request: 'хоче стати твоїм Gym Bro', friend_accepted: 'прийняв(-ла) твою заявку Gym Bro', training_invite:'запрошує на спільне тренування',training_accepted:'прийняв(-ла) запрошення на тренування' };
+  openModal(`<div class="sectionhead"><h2 id="notice-title">СПОВІЩЕННЯ</h2>${btn('Закрити', 'close', '', 'ghost')}</div>${S.notices.some((n)=>!n.read) ? btn('Позначити всі прочитаними', 'read-all-notices', '', 'secondary') : ''}${S.noticeError ? `<p class="error">${esc(S.noticeError)}</p>` : ''}<div class="notice-list">${S.notices.map((n)=>`<button class="notice-item ${n.read ? '' : 'unread'}" data-action="open-notice" data-id="${esc(n.id)}">${personAvatar(n.actor)}<span class="grow"><strong>${esc(n.actor?.name || 'Спортсмен')}</strong><span>${labels[n.type] || 'Нове сповіщення'}</span><time>${displayDate(n.createdAt)}</time></span>${n.read ? '' : '<i aria-label="Непрочитане"></i>'}</button>`).join('') || '<p class="notice-empty muted">Скринька пуста.</p>'}</div>`, 'notice-title', 'notifications-dialog');
+}
+function startNoticeWatch() {
+  const uid = S.user.uid;
+  let revision = 0;
+  stopNotices?.();
+  stopNotices = db.watchNotifications(async (notices) => {
+    const currentRevision = ++revision;
+    const actors = Object.fromEntries(await Promise.all([...new Set(notices.map((n)=>n.actorId))].map(async (id)=>[id, await db.getLive(`publicProfiles/${id}`).catch(()=>null)])));
+    if (S.user?.uid !== uid || currentRevision !== revision) return;
+    S.notices = notices.filter((n)=>!S.blocked.some((b)=>b.id === n.actorId)).map((n)=>({ ...n, actor: actors[n.actorId] })); S.noticeError = '';
+    updateNoticeBadge();
+    if (modal.open && modal.classList.contains('notifications-dialog')) noticeInbox();
+  }, (error) => { if (S.user?.uid === uid) { S.noticeError = err(error); updateNoticeBadge(); } });
+}
+function summaryScreen(session) {
+  const stats=workoutSummary(session,S.sessions);
+  return `<div class="workout-summary">${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`)}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Ще одне тренування позаду'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section><section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Цього разу без нових рекордів. Кожне тренування додає досвіду.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
+}
+function editMeasurement(id = '') {
+  const record=S.measurements.find((m)=>m.id===id);
+  openModal(`<div class="sectionhead"><h2 id="measurement-title">${record ? 'Редагувати заміри' : 'Додати заміри'}</h2>${btn('Закрити','close','','ghost')}</div><p class="small muted">Ці дані доступні лише тобі. Заповнюй тільки потрібні поля.</p><form id="measurement-form"><label>Дата<input id="measurement-date" name="date" type="date" required min="1900-01-01" max="${localDate()}" value="${record?.date || localDate()}" ${record ? 'readonly' : ''} /></label><div class="formgrid">${Object.entries(measurementFields).map(([key,config])=>field(`${config.label}, ${config.unit}`,key,record?.[key]??'','number',`min="${config.min}" max="${config.max}" step="0.01"`)).join('')}</div><label>Примітка<textarea name="note" maxlength="500" rows="2">${esc(record?.note || '')}</textarea></label><p class="small muted">Один запис на дату. Збереження на ту саму дату оновить його.</p><button class="btn" type="submit">Зберегти заміри</button><div class="form-error" role="alert"></div></form>`,'measurement-title');
+}
+function measurementsPanel() {
+  const records=[...S.measurements].sort((a,b)=>b.date.localeCompare(a.date));
+  const config=measurementFields[S.measurementMetric] || measurementFields.weight;
+  const start=new Date();start.setDate(start.getDate()-Number(S.measurementPeriod));
+  const points=measurementSeries(records,S.measurementMetric,S.measurementPeriod==='all'?'':localDate(start));
+  const first=points[0],last=points.at(-1),delta=last&&first?Math.round((last.value-first.value)*100)/100:0;
+  return `<section class="card body-measurements"><div class="sectionhead"><div><span class="private-label">Лише для тебе</span><h2>Заміри тіла</h2></div>${btn('Додати заміри','new-measurement','','secondary')}</div><p class="small muted">Вага тіла й обхвати. Ці записи не публікуються в профілі та недоступні іншим користувачам.</p>${S.measurementsError ? '<p class="error">Не вдалося завантажити заміри. Спробуй оновити сторінку.</p>' : ''}<div class="formgrid"><label>Показник<select id="measurement-metric">${Object.entries(measurementFields).map(([key,value])=>`<option value="${key}" ${S.measurementMetric===key?'selected':''}>${value.label}, ${value.unit}</option>`).join('')}</select></label><label>Період<select id="measurement-period">${[['30','30 днів'],['90','90 днів'],['365','Рік'],['all','Увесь час']].map(([key,label])=>`<option value="${key}" ${S.measurementPeriod===key?'selected':''}>${label}</option>`).join('')}</select></label></div>${points.length ? `<div class="measurement-overview"><strong>${last.value} ${config.unit}</strong><span class="small muted">${last.date}${points.length>1?` · Зміна за період: ${delta>0?'+':''}${delta} ${config.unit}`:''}</span></div>${measurementChart(points,config.unit)}` : '<p class="muted">Додай заміри, щоб побачити історію змін.</p>'}${records.length ? `<details class="measurement-history"><summary>Історія замірів · ${records.length}</summary><div class="measurement-table"><table><thead><tr><th>Дата</th>${Object.values(measurementFields).map((f)=>`<th>${f.label}, ${f.unit}</th>`).join('')}<th>Примітка</th><th>Дії</th></tr></thead><tbody>${records.map((record)=>`<tr><td>${record.date}</td>${Object.keys(measurementFields).map((key)=>`<td>${record[key]??'—'}</td>`).join('')}<td class="measurement-note">${esc(record.note)}</td><td><div class="actions">${btn('Змінити','edit-measurement',`data-id="${esc(record.id)}"`,'ghost')}${btn('Видалити','delete-measurement',`data-id="${esc(record.id)}"`,'ghost')}</div></td></tr>`).join('')}</tbody></table></div></details>` : ''}</section>`;
+}
+function measurementChart(points,unit) {
+  const values=points.map((p)=>p.value),low=Math.min(...values),high=Math.max(...values),pad=Math.max((high-low)*0.15,0.5),min=low-pad,max=high+pad;
+  const x=(index)=>points.length===1?330:60+index*540/(points.length-1),y=(value)=>190-(value-min)/(max-min)*150;
+  return `<svg class="progress-chart" viewBox="0 0 660 240" role="img" aria-label="Графік замірів, ${unit}">${[0,0.5,1].map((fraction)=>{const value=min+(max-min)*fraction;return `<line class="chart-grid" x1="60" x2="600" y1="${y(value)}" y2="${y(value)}"/><text x="52" y="${y(value)+4}" text-anchor="end">${Math.round(value*10)/10}</text>`;}).join('')}<polyline class="chart-line" points="${points.map((p,index)=>`${x(index)},${y(p.value)}`).join(' ')}"/>${points.map((p,index)=>`<circle class="chart-point" cx="${x(index)}" cy="${y(p.value)}" r="4"><title>${p.date}: ${p.value} ${unit}</title></circle>`).join('')}<text x="60" y="220">${points[0].date}</text>${points.length>1?`<text x="600" y="220" text-anchor="end">${lastDate(points)}</text>`:''}</svg>`;
+}
+function lastDate(points) { return points.at(-1).date; }
 function sessionView() {
+  const summary = S.sessions.find((session)=>session.id === S.summaryId && session.status === 'completed');
+  if (summary) return summaryScreen(summary);
   const s = ongoing();
   if (!s)
     return heading(
@@ -1539,9 +1845,10 @@ function sessionView() {
       "Результат уже в історії.",
       btn("На головну", "route", 'data-id="home"'),
     );
+  if (s.warmup?.trim() && !s.warmupDone) return `<div class="session">${heading(s.name, 'Перед тренуванням', btn('Згорнути', 'route', 'data-id="home"', 'ghost'))}<section class="card warmup-card"><span class="eyebrow">Розминка</span><h2>Підготуйся до тренування</h2><p class="workout-description">${esc(s.warmup)}</p><div class="actions">${btn('✓ Розминку виконано', 'warmup-done')}${btn('Пропустити розминку', 'warmup-skip', '', 'ghost')}</div></section></div>`;
   if (!s.items.length) return `<div class="session">${heading(s.name, "Тренування словами", btn("Згорнути", "route", 'data-id="home"', "ghost"))}<section class="card">${workoutDescription(s)}<p class="small muted">Після виконання збережи тренування в історію.</p>${btn("✓ Завершити тренування", "finish-text", "", "wide")}</section></div>`;
   const i = s.items[s.index],
-    count = s.logs.filter((l) => l.index === s.index).length,
+    count = workingSetCount(s),
     plan = setPlan(i, Math.min(count, i.sets - 1));
   return `
     <div class="session">
@@ -1558,7 +1865,7 @@ function sessionView() {
         <h2 class="workout-title" style="margin-top:20px">${esc(i.name)}</h2>
         ${i.custom ? '<span class="badge">Вправа своїми словами</span>' : exercisePhoto(i, "large")}
         <p class="muted">
-          ${i.sets} підходи ·
+          ${i.sets} робочих підходів ·
           ${plan.seconds ? `${plan.seconds} сек` : esc(plan.reps) + " повторень"}${
             plan.weight ? ` · ${plan.weight} кг` : ""
           }
@@ -1583,7 +1890,9 @@ function sessionView() {
             `,
           ).join("")}
         </div>
+        ${s.logs.some((l) => l.index === s.index) ? `<div class="notice"><strong>Виконані підходи</strong>${s.logs.map((l, k) => l.index === s.index ? `<p class="small">${setLogLabel(s.logs, k)}: ${l.reps} повторень · ${l.weight} кг</p>` : "").join("")}</div>` : ""}
         ${previousWorkout(i, s)}
+        ${(() => { const record = personalRecords(S.sessions).find((r) => r.key === exerciseKey(i)); return record ? `<p class="record-badge">🏆 Твій рекорд: ${record.weight} кг × ${record.reps}</p>` : ''; })()}
         ${
           plan.seconds
             ? `
@@ -1599,8 +1908,10 @@ function sessionView() {
             `
             : ""
         }
-        <p class="small muted">Підхід ${Math.min(count + 1, i.sets)} · відпочинок ${plan.rest} сек</p>
+        <p class="small muted">Робочий підхід ${Math.min(count + 1, i.sets)} · відпочинок ${plan.rest} сек</p>
+        <p class="small muted">Розминочних виконано: ${s.logs.filter((l) => l.index === s.index && l.warmup).length}. Вони записуються додатково до робочих.</p>
         <form id="set-form" style="margin-top:22px">
+          ${count < i.sets && previousWorkingSet(S.sessions, i, s.id, count) ? btn('↶ Як минулого разу', 'use-previous-set', 'type="button"', 'secondary') : ''}
           ${actualMetrics(i, s)}
           <div class="formgrid">
             ${field(
@@ -1620,6 +1931,8 @@ function sessionView() {
           <button class="btn wide" type="submit" ${count >= i.sets ? "disabled" : ""}>
             ${count >= i.sets ? "Усі підходи виконано" : "✓ Завершити підхід"}
           </button>
+          <button class="btn secondary wide" type="submit" data-warmup="1" ${s.logs.filter((l) => l.index === s.index && l.warmup).length >= 20 ? "disabled" : ""}>＋ Записати розминочний підхід</button>
+          <p class="small muted">Для розминки введи її повторення та вагу у полях вище.</p>
           <div class="form-error" role="alert"></div>
         </form>
       </section>
@@ -1652,6 +1965,7 @@ function sessionView() {
           count < i.sets ? "disabled" : "",
         )}${btn("Пропустити вправу", "skip", "", "ghost")}
         ${s.logs.length ? btn("Скасувати останній підхід", "undo-set", "", "secondary") : ""}
+        ${btn('Завершити достроково', 'finish-early', '', 'ghost')}
       </div>
     </div>
   `;
@@ -1671,14 +1985,16 @@ function displayDate(value) {
   const date = new Date(activityMillis(value) || NaN);
   return Number.isNaN(date.getTime()) ? "Немає даних" : date.toLocaleString("uk-UA");
 }
+function homeAccessControl(id) {
+  const enabled = !!S.adminAccess[id]?.homeWorkouts;
+  return `<div class="admin-access-control"><div><strong>Домашні комплекси</strong><p class="small muted" data-access-status>${enabled ? 'Доступ надано' : 'Доступ вимкнено'}</p></div>${btn(enabled ? 'Вимкнути доступ' : 'Надати доступ', 'toggle-home-access', `data-id="${esc(id)}" aria-pressed="${enabled}"`, enabled ? 'secondary' : '')}</div>`;
+}
 function adminUsersList(query = "") {
   const search = query.trim().toLocaleLowerCase("uk");
   const list = S.adminUsers.filter((u) => `${u.name || ""} ${u.email || ""} ${u.customId || ""} ${u.id}`.toLocaleLowerCase("uk").includes(search));
-  return `<p class="small muted">Знайдено: ${list.length}</p>` + list.map((u) => `<article class="admin-user-row">
-    <div><h3>${esc(u.name || "Без імені")} <span class="badge">ID ${esc(u.customId || "—")}</span></h3>
-    <p>${esc(u.email || "Email не вказано")}</p><p class="small muted">Реєстрація: ${displayDate(u.registeredAt || u.createdAt)}<br>Остання активність: ${displayDate(u.lastActiveAt)}</p></div>
-    <div class="actions">${btn(S.adminAccess[u.id]?.homeWorkouts ? "Забрати доступ до домашніх комплексів" : "Надати доступ до домашніх комплексів", "toggle-home-access", `data-id="${esc(u.id)}" aria-pressed="${!!S.adminAccess[u.id]?.homeWorkouts}"`, "ghost")}
-    ${btn("Програми й тренування", "admin-user", `data-id="${esc(u.id)}"`, "secondary")}</div></article>`).join("");
+  return `<p class="small muted">Знайдено: ${list.length}</p><div class="admin-member-list">` + list.map((u) => `<article class="admin-member-card">
+    ${personAvatar(u)}<div class="grow"><h3>${esc(u.name || 'Без імені')} <span class="badge">#${esc(u.customId || '—')}</span></h3><p class="small muted">${esc(u.email || 'Email не вказано')}</p><span class="small muted">Активність: ${displayDate(u.lastActiveAt)}</span></div>
+    <div class="admin-member-actions"><span class="access-pill ${S.adminAccess[u.id]?.homeWorkouts ? 'enabled' : ''}">${S.adminAccess[u.id]?.homeWorkouts ? 'Домашні · увімкнено' : 'Домашні · вимкнено'}</span>${btn('Керувати', 'admin-user', `data-id="${esc(u.id)}"`, 'secondary')}</div></article>`).join('') + '</div>';
 }
 function adminItemDetails(item) {
   return `<div class="admin-plan-item"><h4>${esc(item.name)}</h4>
@@ -1686,17 +2002,29 @@ function adminItemDetails(item) {
     ${item.setPlans ? item.setPlans.map((s, k) => `<p class="small">Підхід ${k + 1}: ${esc(s.reps)} повторень · ${s.weight} кг · ${s.seconds} сек · відпочинок ${s.rest} сек</p>`).join("") : ""}
     ${item.note ? `<p class="small">${esc(item.note)}</p>` : ""}${metricSummary(item.metrics)}</div>`;
 }
+function adminTagForm(uid, tag = { text: '', color: '#fff59d', textColor: '#1d1d1f' }, index = -1) {
+  return `<form class="admin-tag-form" data-user="${esc(uid)}" data-index="${index}"><div class="admin-tag-fields"><label>Текст<input name="text" value="${esc(tag.text)}" required maxlength="40" placeholder="Активний гравець" /></label><label>Фон<input type="color" name="color" value="${esc(tag.color)}" /></label><label>Текст<input type="color" name="textColor" value="${esc(tag.textColor)}" /></label></div><div class="admin-tag-footer"><span class="user-tag" data-tag-preview style="--tag-bg:${esc(tag.color)};--tag-fg:${esc(tag.textColor)}">${esc(tag.text || 'Новий тег')}</span><div class="actions"><button class="btn secondary" type="submit">${index < 0 ? 'Видати тег' : 'Зберегти тег'}</button>${index >= 0 ? btn('Прибрати','remove-user-tag',`type="button" data-id="${esc(uid)}" data-index="${index}"`,'ghost') : ''}</div></div><div class="form-error" role="alert"></div></form>`;
+}
+function adminTagEditor(uid, tags) {
+  return `<section class="admin-tag-editor"><h3>Теги користувача</h3><p class="small muted">До 5 тегів. Видно над місцеположенням у профілі. Керувати може лише власник.</p>${tags.map((tag,index)=>adminTagForm(uid,tag,index)).join('')}${tags.length < 5 ? adminTagForm(uid) : '<p class="small muted">Видано максимальну кількість тегів.</p>'}</section>`;
+}
 async function adminUser(id) {
   if (!owner()) throw Error("Немає доступу");
-  const user = S.adminUsers.find((u) => u.id === id);
+  let user = S.adminUsers.find((u) => u.id === id);
   if (!user) throw Error("Користувача не знайдено.");
-  const [programs, sessions] = await Promise.all([db.list(`users/${id}/programs`), db.list(`users/${id}/sessions`)]);
+  const [programs, sessions, freshUser, labels] = await Promise.all([db.list(`users/${id}/programs`), db.list(`users/${id}/sessions`), db.getLive(`users/${id}`), db.getLive(`userLabels/${id}`)]);
+  if (freshUser) { user = { ...freshUser, id }; S.adminUsers = S.adminUsers.map((u) => u.id === id ? user : u); }
+  const ips = loginIpHistory(user);
   const completed = sessions.filter((s) => s.status === "completed");
   const latest = sessions.filter((s) => s.status !== "planned").sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
-  openModal(`<div class="sectionhead"><div><span class="eyebrow">Користувач · ID ${esc(user.customId || "—")}</span><h2>${esc(user.name || "Без імені")}</h2></div>${btn("Закрити", "close", "", "ghost")}</div>
-    <dl class="user-facts"><div><dt>Email</dt><dd>${esc(user.email || "—")}</dd></div><div><dt>Реєстрація</dt><dd>${displayDate(user.registeredAt || user.createdAt)}</dd></div>
-    <div><dt>Остання активність</dt><dd>${displayDate(user.lastActiveAt)}</dd></div><div><dt>Останнє тренування</dt><dd>${esc(latest?.date || "Ще немає")}</dd></div></dl>
-    <div class="editor-overview"><span><b>${programs.length}</b> програм</span><span><b>${completed.length}</b> завершених тренувань</span><span><b>${sessions.filter((s) => s.status === "active").length}</b> активних</span></div>
+  openModal(`<header class="admin-member-header"><div class="row">${personAvatar(user)}<div><span class="eyebrow">Керування користувачем · #${esc(user.customId || '—')}</span><h2 id="admin-member-title">${esc(user.name || 'Без імені')}</h2><p class="small muted">${esc(user.email || '—')}</p></div></div>${btn('Закрити', 'close', '', 'ghost')}</header>
+    <div class="admin-member-stats"><div><strong>${programs.length}</strong><span>Програм</span></div><div><strong>${completed.length}</strong><span>Завершених тренувань</span></div><div><strong>${memberDays(user.createdAt)}</strong><span>Днів з нами</span></div></div>
+    <div class="admin-member-nav" aria-label="Розділи керування користувачем">${[['overview','Огляд і доступ'],['training','Тренування'],['logins','Історія входів']].map(([key,title]) => btn(title,'admin-member-panel',`data-panel="${key}" aria-pressed="${key === 'overview'}"`,'ghost')).join('')}</div>
+    <section data-member-panel="overview"><dl class="user-facts"><div><dt>Реєстрація</dt><dd>${displayDate(user.registeredAt || user.createdAt)}</dd></div><div><dt>Остання активність</dt><dd>${displayDate(user.lastActiveAt)}</dd></div><div><dt>Останнє тренування</dt><dd>${esc(latest?.date || 'Ще немає')}</dd></div><div><dt>Останній вхід</dt><dd>${displayDate(user.lastLoginTime)}</dd></div></dl>
+    ${homeAccessControl(id)}${adminTagEditor(id, labels?.tags || [])}<div class="actions">${btn('Відкрити профіль', 'view-person', `data-id="${esc(id)}"`, 'secondary')}</div></section>
+    <section data-member-panel="logins" hidden><h3>Останні 5 входів з IP</h3><p class="small muted">Найновіші зверху. Повторні входи з тієї самої адреси показуються окремо.</p>
+    <div class="login-ip-list">${ips.map((entry, index) => `<div class="login-ip-row"><span class="login-ip-number">${index + 1}</span><div><code>${esc(entry.ip)}</code><p class="small muted">${displayDate(entry.time)}</p></div>${index === 0 ? '<span class="badge">Останній</span>' : ''}</div>`).join('') || '<p class="muted">IP ще не записані. Історія з’явиться після наступних входів.</p>'}</div><p class="small muted">IP передає застосунок під час входу. Якщо визначити адресу не вдалося, запис не додається.</p></section>
+    <section data-member-panel="training" hidden>
     <h3>Програми користувача</h3>
     ${programs.length ? programs.map((p) => `<details class="user-program" open><summary>${esc(p.name)} ${p.id === user.activeProgramId ? '· Активна' : ''}</summary>
       <p class="small muted">${esc(p.type)}</p>${(p.days || []).map((d) => `<section class="admin-plan-day"><h3>${esc(dayLabel(p, d, true))} · ${esc(d.name)}</h3><p>${esc(d.groups)}</p>${workoutDescription(d)}${d.items.map(adminItemDetails).join("") || (d.description ? "" : '<p class="muted">Плану ще немає.</p>')}</section>`).join("")}</details>`).join("") : '<p class="muted">Програм ще немає.</p>'}
@@ -1704,7 +2032,7 @@ async function adminUser(id) {
     ${sessions.length ? [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) => `<details class="user-program"><summary>${esc(s.date)} · ${esc(s.name)} · ${s.status === "planned" ? "Заплановано" : s.status === "completed" ? "Завершено" : "Триває"}</summary>
       <p class="small muted">${s.logs?.length || 0} підходів${s.endedAt ? ` · ${Math.max(0, Math.round((s.endedAt - s.startedAt) / 60000))} хв` : ""}</p>
       ${workoutDescription(s)}
-      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k) => `<p>Виконано ${k + 1}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}`, "", "admin-user-dialog");
+      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k, logs) => `<p>${setLogLabel(logs, k)}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}</section>`, "admin-member-title", "admin-user-dialog");
 }
 function adminCatalogControls() {
   const f = S.adminCatalog;
@@ -1732,7 +2060,7 @@ function admin() {
   return (
     heading("Керування", "Каталог, шаблони та налаштування сайту.") +
     `
-      <div class="stack">
+      <div class="stack">${reportsPanel()}
         <section class="card" id="admin-users">
           <div class="sectionhead"><div><span class="eyebrow">Учасники</span><h2>Користувачі</h2></div>${btn("Завантажити / оновити", "load-users", "", "secondary")}</div>
           <p class="muted">Профілі, програми за днями та результати тренувань.</p>
@@ -2045,7 +2373,8 @@ ${esc(e[k] || "")}</textarea
   `);
 }
 async function refresh() {
-  const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access] = await Promise.all([
+  S.measurementsError = '';
+  const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access, measurements] = await Promise.all([
     db.list(privatePath("programs")),
     db.list(privatePath("sessions")),
     db.list("exercises"),
@@ -2057,6 +2386,7 @@ async function refresh() {
       if (error.code === "permission-denied" || !navigator.onLine) return null;
       throw error;
     }),
+    db.list(privatePath('measurements')).catch((error)=>{S.measurementsError=err(error);return []; }),
   ]);
   if (owner() && S.route === "admin") {
     const retired = [
@@ -2070,18 +2400,27 @@ async function refresh() {
     programs,
     exercisePreferences: Object.fromEntries(preferences.map(({ id, ...data }) => [id, data])),
     sessions,
+    measurements,
     exercises: [...exercises.filter((e) => !demoExerciseIds.has(e.id)), ...personalExercises.map((e) => ({ ...e, id: "personal:" + e.id, personal: true }))],
     templates: templates.filter((t) => !demoTemplateIds.has(t.id)),
     settings: settings || S.settings,
     loaded: true,
   });
+  if (navigator.onLine && S.selfPublic) await db.publishProfileStats(sessions).catch((error) => console.warn('Статистика профілю:', error.code));
 }
 async function saveSession(s) {
+  const wasActive = S.sessions.some((session)=>session.id === s.id && session.status === 'active');
   s.updatedAt = Date.now();
   await db.save(privatePath(`sessions/${s.id}`), stripId(s));
   const i = S.sessions.findIndex((x) => x.id === s.id);
   if (i < 0) S.sessions.push(s);
   else S.sessions[i] = s;
+  if (wasActive && s.status === 'completed' && S.route === 'session') {
+    S.summaryId=s.id;
+    if (currentPage === 'session') window.history.replaceState(null,'',new URL(`workout.html?summary=${encodeURIComponent(s.id)}`,appBase));
+  }
+  if (s.status === 'completed') try { clearSetDraft(localStorage,S.user.uid,s.id); } catch {}
+  if (navigator.onLine && s.status === 'completed') db.publishProfileStats(S.sessions).catch((error) => console.warn('Не вдалося оновити статистику профілю:', error.code));
   if (s.status === "completed" && s.programId === active()?.id && active()?.scheduleMode === "sequence") chosenDay = null;
   render();
 }
@@ -2090,6 +2429,168 @@ async function action(a, b) {
     n = +b.dataset.n,
     j = +b.dataset.j;
   switch (a) {
+    case 'show-workout-summary': modal.close(); navigate('session',`?summary=${encodeURIComponent(id)}`); break;
+    case 'new-measurement': editMeasurement(); break;
+    case 'edit-measurement': editMeasurement(id); break;
+    case 'delete-measurement':
+      if(confirm(`Видалити заміри за ${id}?`)) {
+        await db.remove(privatePath(`measurements/${id}`)); S.measurements=S.measurements.filter((m)=>m.id!==id); render(); toast('Заміри видалено');
+      }
+      break;
+    case 'save-profile-image': {
+      if (!imageEdit) throw Error('Спочатку обери зображення.');
+      const {file,kind,crop}=imageEdit;
+      if (kind === 'avatar') {
+        const photo=await prepareAvatar(file,crop); await db.ensurePublicProfile(S.profile); await db.changeAvatar(photo);
+        S.profile.photo=photo; S.selfPublic.photo=photo; if(S.people?.uid===S.user.uid)S.people.person.photo=photo;
+      } else {
+        const banner=await prepareBanner(file,crop); await db.patch(`publicProfiles/${S.user.uid}`,{banner});
+        S.selfPublic.banner=banner; if(S.people?.uid===S.user.uid)S.people.person.banner=banner;
+      }
+      modal.close(); disposeImageEdit(); render(); toast('Зображення збережено');
+      break;
+    }
+    case 'person-actions': personActions(id); break;
+    case 'report-person': reportDialog(id); break;
+    case 'report-comment': {
+      const comment=S.people.comments.find((c)=>c.id===id);
+      if(comment) reportDialog(comment.authorId,id);
+      break;
+    }
+    case 'block-person':
+      if(confirm('Заблокувати користувача? Дружбу та заявки буде прибрано. Він не зможе писати тобі чи надсилати нові запрошення.')) {
+        await db.blockUser(id); await loadSafety(); await loadPeople();
+        S.notices=S.notices.filter((n)=>n.actorId!==id); modal.close(); render(); toast('Користувача заблоковано');
+      }
+      break;
+    case 'unblock-person':
+      await db.unblockUser(id); await loadSafety(); await loadPeople(); modal.close(); render(); toast('Користувача розблоковано');
+      break;
+    case 'load-reports':
+      if(!owner())throw Error('Немає доступу.');
+      S.reports=await db.reports();
+      S.reportProfiles=Object.fromEntries(await Promise.all([...new Set(S.reports.flatMap((r)=>[r.reporterId,r.targetId]))].map(async(uid)=>[uid,await db.getLive(`publicProfiles/${uid}`)])));
+      render(); break;
+    case 'review-report':
+      if(!owner())throw Error('Немає доступу.');
+      await db.reviewReport(id,b.dataset.status); S.reports=await db.reports(); render(); break;
+    case 'open-report-comment': {
+      const report=S.reports.find((r)=>r.id===id); if(report)await openPerson(report.profileId,report.commentId);
+      break;
+    }
+    case 'invite-workout': inviteWorkoutDialog(id); break;
+    case 'respond-training-invite':
+      await db.respondTrainingInvite(id,b.dataset.status); await refresh(); render(); await openTrainingInvite(id);
+      toast(b.dataset.status==='accepted' ? 'Тренування додано до календаря' : 'Відповідь збережено'); break;
+    case 'invite-calendar': navigate('home',`?date=${encodeURIComponent(b.dataset.date)}`); break;
+    case 'settings-section':
+      if (!['user','privacy','security'].includes(b.dataset.section)) break;
+      S.settingsSection = b.dataset.section; render();
+      break;
+    case 'account-password-reset':
+      await db.resetPassword(S.user.email); toast('Лист для зміни пароля надіслано на твою пошту.');
+      break;
+    case 'remove-user-tag': {
+      if (!owner()) throw Error('Немає доступу.');
+      const labels = await db.getLive(`userLabels/${id}`);
+      const tags = (labels?.tags || []).filter((_,index)=>index !== +b.dataset.index);
+      await db.save(`userLabels/${id}`, { tags: tagData(tags) });
+      await adminUser(id); toast('Тег прибрано');
+      break;
+    }
+    case 'open-notices': noticeInbox(); break;
+    case 'read-all-notices':
+      await db.readNotifications(S.notices.filter((n)=>!n.read).map((n)=>n.id));
+      S.notices.forEach((n)=>{ n.read = true; }); updateNoticeBadge(); noticeInbox();
+      break;
+    case 'open-notice': {
+      const notice = S.notices.find((n)=>n.id === id);
+      if (!notice) break;
+      if (!notice.read) await db.readNotifications([id]);
+      if (notice.type.startsWith('training_')) await openTrainingInvite(notice.targetId);
+      else await openPerson(notice.profileId, ['comment', 'reply'].includes(notice.type) ? notice.targetId : '');
+      break;
+    }
+    case 'copy-profile-link':
+      await navigator.clipboard.writeText(profileURL(S.profile.customId)); toast('Посилання скопійовано');
+      break;
+    case 'open-gym-bros': S.invites=await db.trainingInvites(); gymBroDirectory(); break;
+    case 'view-training-invite': await openTrainingInvite(id); break;
+    case 'cancel-comment-reply': replyingTo = null; focusCommentComposer(); break;
+    case 'reply-profile-comment': {
+      const comment = S.people.comments.find((c)=>c.id === id);
+      replyingTo = comment?.parentId || id;
+      focusCommentComposer();
+      break;
+    }
+    case 'remove-banner':
+      await db.patch(`publicProfiles/${S.user.uid}`, { banner: '' });
+      S.selfPublic.banner = ''; S.people.person.banner = ''; render(); toast('Банер прибрано');
+      break;
+    case 'like-profile-comment': {
+      const comment = S.people.comments.find((c)=>c.id === id);
+      if (!comment) break;
+      await db.toggleCommentLike(S.people.uid, id, !!comment.liked);
+      const draft = document.querySelector('#profile-comment-form textarea')?.value || '';
+      await loadPeople(); render();
+      const input = document.querySelector('#profile-comment-form textarea'); if (input) input.value = draft;
+      break;
+    }
+    case 'warmup-done':
+    case 'warmup-skip': {
+      const session = ongoing();
+      if (!session) throw Error('Немає активного тренування.');
+      await saveSession({ ...copy(session), warmupDone: true, warmupSkipped: a === 'warmup-skip' });
+      break;
+    }
+    case 'use-previous-set': {
+      const session = ongoing(), item = session?.items[session.index];
+      const previous = item && previousWorkingSet(S.sessions, item, session.id, workingSetCount(session));
+      if (!previous) throw Error('Попереднього робочого підходу немає.');
+      const form = document.querySelector('#set-form');
+      form.elements.reps.value = previous.reps;
+      form.elements.weight.value = previous.weight;
+      (item.metrics || []).forEach((metric, index) => {
+        const value = previous.metrics?.find((m) => m.name === metric.name && m.unit === metric.unit);
+        if (value) form.elements[`actual-metric-${index}`].value = value.value;
+      });
+      captureSetInputs();
+      toast('Повторення й вагу підставлено. Перевір перед збереженням.');
+      break;
+    }
+    case 'finish-early':
+      if (confirm('Завершити тренування зараз? Виконані підходи залишаться в історії, незавершені вправи будуть позначені.')) {
+        await saveSession(finishEarly(ongoing()));
+        toast('Тренування завершено. Виконані підходи збережено.');
+      }
+      break;
+    case 'view-person':
+      await openPerson(id);
+      break;
+    case 'refresh-people':
+      await loadPeople(); render();
+      break;
+    case 'friend-request': {
+      if (id === S.user.uid || id !== S.people?.uid || !S.people.person) throw Error('Обери профіль іншого спортсмена.');
+      if (S.people.relations.some((r) => r.members.includes(id))) throw Error('Заявка або дружба вже існує. Онови профіль.');
+      await db.requestGymBro(id);
+      await loadPeople(); render(); toast('Заявку Gym Bro надіслано');
+      break;
+    }
+    case 'friend-accept':
+      await db.acceptGymBro(id);
+      await loadPeople(); render(); if (modal.open && modal.querySelector('#gym-bro-title')) gymBroDirectory(); toast('Тепер ви Gym Bro 🤝');
+      break;
+    case 'friend-remove':
+      if (confirm('Прибрати цю дружбу або заявку Gym Bro?')) {
+        await db.removeGymBro(id); await loadPeople(); render(); if (modal.open && modal.querySelector('#gym-bro-title')) gymBroDirectory();
+      }
+      break;
+    case 'delete-profile-comment':
+      if (confirm('Видалити коментар?')) {
+        await db.remove(`publicProfiles/${profileUid()}/comments/${id}`); await loadPeople(); render();
+      }
+      break;
     case "share-program": {
       if (!navigator.onLine) throw Error("Для створення посилання потрібен інтернет.");
       const program = S.programs.find((p) => p.id === id);
@@ -2146,9 +2647,15 @@ async function action(a, b) {
       S.adminAccess[id] = data;
       if (id === S.user.uid) S.homeAccess = data.homeWorkouts;
       document.querySelector("#admin-users-list").innerHTML = adminUsersList(document.querySelector("#admin-user-search").value);
+      const control = modal.querySelector('.admin-access-control');
+      if (control) control.outerHTML = homeAccessControl(id);
       toast(data.homeWorkouts ? "Доступ надано" : "Доступ відкликано");
       break;
     }
+    case 'admin-member-panel':
+      modal.querySelectorAll('[data-member-panel]').forEach((panel) => { panel.hidden = panel.dataset.memberPanel !== b.dataset.panel; });
+      modal.querySelectorAll('[data-action="admin-member-panel"]').forEach((button) => button.setAttribute('aria-pressed', String(button === b)));
+      break;
     case "admin-user":
       await adminUser(id);
       break;
@@ -2210,6 +2717,7 @@ async function action(a, b) {
       break;
 
     case "route":
+      if (id === 'profile' && currentPage === 'profile' && profileUid() !== S.user.uid) { navigate('profile'); break; }
       if (S.route === "editor") {
         persistEditorDraft(true);
         if (!confirm(draftStored ? "Вийти з редактора? Чернетка залишиться на цьому пристрої." : "Вийти з редактора без збереження?")) return;
@@ -2314,8 +2822,8 @@ async function action(a, b) {
           <h2>${esc(s.name)}</h2>
           <button class="mini-btn" data-action="close">Закрити</button>
         </div>
-        <p class="muted">${s.date} · ${Math.round((s.endedAt - s.startedAt) / 60000)} хв</p>
-        ${btn("Виправити тренування", "edit-history", `data-id="${esc(s.id)}"`, "secondary")}
+        <p class="muted">${s.date} · ${Math.round((s.endedAt - s.startedAt) / 60000)} хв${s.endedEarly ? ' · Завершено достроково' : ''}</p>
+        ${btn("Виправити тренування", "edit-history", `data-id="${esc(s.id)}"`, "secondary")}${btn('Підсумок','show-workout-summary',`data-id="${esc(s.id)}"`,'ghost')}
         ${workoutDescription(s)}
         ${s.items
           .map(
@@ -2326,7 +2834,7 @@ async function action(a, b) {
                 ${
                   s.skipped.includes(k)
                     ? `
-                      <span class="badge">Пропущено</span>
+                      <span class="badge">${s.logs.some((l) => l.index === k) ? 'Виконано частково' : 'Пропущено'}</span>
                     `
                     : ""
                 }
@@ -2334,9 +2842,9 @@ async function action(a, b) {
               ${s.logs
                 .filter((l) => l.index === k)
                 .map(
-                  (l, n) => `
+                  (l, n, logs) => `
                     <p class="small">
-                      Підхід ${n + 1} · ${l.reps} повторень · ${l.weight}
+                      ${setLogLabel(logs, n)} · ${l.reps} повторень · ${l.weight}
                       кг${l.seconds ? ` · ${l.seconds} сек` : i.seconds ? ` · план ${i.seconds} сек` : ""}
                     </p>
                     ${metricSummary(l.metrics)}
@@ -2652,8 +3160,17 @@ async function action(a, b) {
         render();
       }
       break;
+    case "choose-program-day": {
+      const program = S.programs.find((p) => p.id === id);
+      if (!program) throw Error("Програму не знайдено.");
+      requireHomeAccess(program);
+      openModal(`<h2>${esc(program.name)}</h2><p>Обери день програми, який хочеш виконати зараз. Можна тренуватися незалежно від дня тижня.</p>${program.days.map((d) => `<section class="exercise-row"><div class="grow"><h3>${esc(d.name)}</h3><p class="small muted">${esc(dayLabel(program, d, true))} · ${esc(d.groups)}</p></div>${btn("Почати зараз", "start", `data-program="${esc(program.id)}" data-day="${d.weekday}"`, "secondary")}</section>`).join("")}${btn("Закрити", "close", "", "ghost")}`);
+      break;
+    }
     case "start": {
       if (ongoing()) {
+        modal.close();
+        toast("Спочатку заверши поточне тренування. Відкрито його продовження.");
         S.route = "session";
         render();
         break;
@@ -2665,11 +3182,14 @@ async function action(a, b) {
       const s = newSession(p, d);
       s.id = crypto.randomUUID();
       await saveSession(s);
+      modal.close();
       S.route = "session";
       render();
       break;
     }
     case "resume":
+      S.summaryId='';
+      if(currentPage==='session')window.history.replaceState(null,'',new URL('workout.html',appBase));
       S.route = "session";
       render();
       break;
@@ -2679,7 +3199,7 @@ async function action(a, b) {
       break;
     case "timer": {
       const s = copy(ongoing());
-      s.timerEnd = Date.now() + setPlan(s.items[s.index], s.logs.filter((l) => l.index === s.index).length).seconds * 1000;
+      s.timerEnd = Date.now() + setPlan(s.items[s.index], Math.min(workingSetCount(s), s.items[s.index].sets - 1)).seconds * 1000;
       await saveSession(s);
       break;
     }
@@ -2701,7 +3221,7 @@ async function action(a, b) {
       if (a === "skip" && !confirm("Пропустити цю вправу?")) return;
       if (
         a === "next" &&
-        current.logs.filter((l) => l.index === current.index).length <
+        workingSetCount(current) <
           current.items[current.index].sets
       )
         throw Error("Спочатку заверши підходи або пропусти вправу.");
@@ -2810,6 +3330,16 @@ document.addEventListener("keydown", (event) => {
     menu.querySelector("summary").focus();
   });
 });
+document.addEventListener('input', (event) => {
+  if(event.target.closest('#set-form'))captureSetInputs();
+  if(event.target.dataset.crop && imageEdit) { imageEdit.crop[event.target.dataset.crop]=Number(event.target.value); updateImageCrop(); }
+  const form = event.target.closest('.admin-tag-form');
+  if (!form) return;
+  const preview = form.querySelector('[data-tag-preview]');
+  preview.textContent = form.elements.text.value.trim() || 'Новий тег';
+  preview.style.setProperty('--tag-bg', form.elements.color.value);
+  preview.style.setProperty('--tag-fg', form.elements.textColor.value);
+});
 document.addEventListener("invalid", (event) => {
   if (!event.target.closest("#program-form")) return;
   let container = event.target.parentElement;
@@ -2824,10 +3354,78 @@ document.addEventListener("submit", async (event) => {
   if (busy) return;
   const f = event.target,
     v = new FormData(f),
-    button = f.querySelector("[type=submit]");
+    button = event.submitter || f.querySelector("[type=submit]");
   busy = true;
   button.disabled = true;
   try {
+    if(f.id==='measurement-form') {
+      const data=measurementData(Object.fromEntries(v));
+      const record={...data,updatedAt:Date.now()};
+      await db.save(privatePath(`measurements/${data.date}`),record);
+      S.measurements=[...S.measurements.filter((m)=>m.id!==data.date),{...record,id:data.date}];
+      modal.close(); render(); toast('Приватні заміри збережено');
+    }
+    if(f.id==='report-form') {
+      const added=await db.submitReport(f.dataset.target,f.dataset.profile,f.dataset.comment,String(v.get('reason')),String(v.get('detail')||''));
+      modal.close(); toast(added ? 'Скаргу надіслано власнику.' : 'Ти вже надіслав скаргу на цей профіль або коментар.');
+    }
+    if(f.id==='training-invite-form') {
+      const program=S.programs.find((p)=>p.id===v.get('program'));
+      const plan=invitePlan(program,v.get('day'),String(v.get('date')),String(v.get('time')||''),String(v.get('note')||''));
+      await db.sendTrainingInvite(f.dataset.to,plan); await refresh(); modal.close(); render(); toast('Запрошення надіслано Gym Bro');
+    }
+    if (f.matches('.admin-tag-form')) {
+      if (!owner()) throw Error('Немає доступу.');
+      const uid = f.dataset.user, index = +f.dataset.index;
+      const labels = await db.getLive(`userLabels/${uid}`);
+      const tags = [...(labels?.tags || [])];
+      const tag = tagData([{ text: String(v.get('text') || ''), color: String(v.get('color')), textColor: String(v.get('textColor')) }])[0];
+      if (index < 0) tags.push(tag);
+      else if (tags[index]) tags[index] = tag;
+      else throw Error('Тег уже змінено. Відкрий користувача знову.');
+      await db.save(`userLabels/${uid}`, { tags: tagData(tags) });
+      await adminUser(uid); toast('Тег збережено');
+    }
+    if (f.id === 'location-form') {
+      const location = String(v.get('location') || '').trim();
+      await db.patch(`publicProfiles/${S.user.uid}`, { location });
+      S.selfPublic.location = location; S.people.person.location = location;
+      render(); toast('Місцеположення збережено');
+    }
+    if (f.id === 'banner-form') await openImageCropper(f.elements.banner.files[0], 'banner');
+    if (f.id === 'bio-form') {
+      const bio = String(v.get('bio') || '').trim();
+      await db.patch(`publicProfiles/${S.user.uid}`, { bio });
+      S.selfPublic.bio = bio; S.people.person.bio = bio;
+      render(); toast('Опис збережено');
+    }
+    if (f.id === 'visibility-form') {
+      const visibility = Object.fromEntries(Object.keys(profileVisibility({})).map((key)=>[key, v.has(key)]));
+      await db.publishProfileStats(S.sessions);
+      await db.patch(`publicProfiles/${S.user.uid}`, { visibility });
+      S.selfPublic.visibility = visibility; S.people.person.visibility = visibility;
+      render(); toast('Видимість профілю збережено');
+    }
+    if (f.id === 'contacts-form') {
+      const contacts = { instagram: contactURL('instagram', v.get('instagram')), telegram: contactURL('telegram', v.get('telegram')) };
+      await db.patch(`publicProfiles/${S.user.uid}`, { contacts });
+      S.people.person.contacts = contacts;
+      render(); toast('Контакти збережено');
+    }
+    if (f.id === 'avatar-form') await openImageCropper(f.elements.avatar.files[0], 'avatar');
+    if (f.id === 'find-person-form') {
+      const number = String(v.get('number')).trim();
+      if (!/^[1-9][0-9]{0,11}$/.test(number)) throw Error('Вкажи числовий ID користувача без #.');
+      const record = await db.getLive(`userNumbers/${number}`);
+      if (!record) throw Error('Користувача з таким ID не знайдено.');
+      location.assign(profileURL(number));
+    }
+    if (f.id === 'profile-comment-form') {
+      const text = commentText(v.get('comment'));
+      await db.addProfileComment(profileUid(), text, replyingTo || '');
+      replyingTo = null;
+      await loadPeople(); render(); toast('Коментар додано');
+    }
     if (f.id === "history-edit-form") {
       const session = S.sessions.find((s) => s.id === f.dataset.id);
       const logs = session.logs.map((l, k) => ({ ...l, reps: +v.get(`log-reps-${k}`), weight: +v.get(`log-weight-${k}`), seconds: +v.get(`log-seconds-${k}`),
@@ -2913,9 +3511,12 @@ document.addEventListener("submit", async (event) => {
           value: String(v.get(`actual-metric-${k}`) || "").trim(),
         }));
       if (!validMetrics(metrics)) throw Error("Перевір власні параметри вправи.");
-      const s = completeSet(current, +v.get("reps"), +v.get("weight"), metrics);
+      const warmup = event.submitter?.dataset.warmup === "1";
+      const record = personalRecords(S.sessions.map((s) => s.id === current.id ? { ...s, status: 'completed' } : s)).find((r) => r.key === exerciseKey(item));
+      const newRecord = !warmup && +v.get('reps') > 0 && (!record || +v.get('weight') > record.weight || +v.get('weight') === record.weight && +v.get('reps') > record.reps);
+      const s = completeSet(current, +v.get("reps"), +v.get("weight"), metrics, warmup);
       await saveSession(s);
-      toast("Підхід збережено");
+      toast(warmup ? "Розминочний підхід збережено" : newRecord ? '🏆 Новий найкращий результат! Заверши тренування, щоб зберегти рекорд.' : "Підхід збережено");
     }
     if (f.id === "private-rating-form") {
       await savePreference(f.dataset.id, { rating: ratingValue(v.get("score")) });
@@ -3016,6 +3617,15 @@ document.addEventListener("input", (event) => {
 });
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if(target.id==='measurement-metric' || target.id==='measurement-period') {
+    if(target.id==='measurement-metric')S.measurementMetric=target.value;else S.measurementPeriod=target.value;
+    const panel=document.querySelector('#measurements-view');if(panel)panel.innerHTML=measurementsPanel();return;
+  }
+  if(target.id==='measurement-date' && !target.readOnly) {
+    const record=S.measurements.find((m)=>m.date===target.value),form=target.form;
+    for(const key of [...Object.keys(measurementFields),'note'])form.elements[key].value=record?.[key]??'';
+    return;
+  }
   if (target.id === "schedule-mode") {
     collectEditor();
     if (target.value === "week" && editor.days.length > 7) {
@@ -3077,7 +3687,9 @@ window.addEventListener("pageshow", (event) => {
   const card = document.querySelector(".auth-card");
   card?.getAnimations().forEach((animation) => animation.cancel());
 });
-window.addEventListener("pagehide", () => persistEditorDraft(true));
+window.addEventListener("pagehide", () => { captureSetInputs(); persistEditorDraft(true); });
+modal.addEventListener('close',disposeImageEdit);
+document.addEventListener('change',(event)=>{if(event.target.id==='invite-program')updateInviteDays();});
 
 window.addEventListener("nexus-sync", (event) => { S.syncError = event.detail.error || ""; updateSyncNotice(); });
 window.addEventListener("offline", updateSyncNotice);
@@ -3085,6 +3697,7 @@ window.addEventListener("online", async () => {
   if (!S.user?.emailVerified || !db?.sync) return;
   try {
     await db.sync(); S.syncError = ""; await refresh();
+    await db.publishProfileStats(S.sessions).catch(()=>{});
     activity.pulse();
     if (S.route !== "editor" && !modal.open && !busy) render(); else updateSyncNotice();
     toast("З’єднання відновлено. Дані синхронізовано.");
@@ -3108,6 +3721,9 @@ setInterval(() => activity.pulse(), 60000);
 document.addEventListener("visibilitychange", () => activity.pulse());
 document.addEventListener("input", () => activity.pulse());
 async function handleUser(user) {
+  stopNotices?.(); stopNotices = null;
+  S.notices = []; S.noticeError = ''; S.selfPublic = null; replyingTo = null;
+  S.blocked=[]; S.blockedProfiles={}; S.reports=[]; S.reportProfiles={}; S.invites=[];
   editorDraftKey = "";
   editor = null;
   S.user = user;
@@ -3117,8 +3733,10 @@ async function handleUser(user) {
   S.loaded = false;
   S.route = currentPage;
   S.profile = null;
+  S.people = null;
   S.programs = [];
   S.sessions = [];
+  S.measurements=[];S.measurementsError='';
   S.exercises = [];
   S.exercisePreferences = {};
   S.adminUsers = [];
@@ -3142,10 +3760,22 @@ async function handleUser(user) {
     await db.sync().catch((error) => { S.syncError = err(error); });
     await refresh();
     if (db.auth.currentUser?.uid !== user.uid) return;
+    if(navigator.onLine)await loadSafety().catch((error)=>console.warn('Не вдалося завантажити блокування:',error.code));
+    if (navigator.onLine) {
+      await db.ensurePublicProfile(S.profile).catch((error)=>console.warn('Профіль спільноти:', error.code));
+      S.selfPublic = await db.getLive(`publicProfiles/${user.uid}`).catch(()=>null);
+      await db.publishProfileStats(S.sessions).catch((error)=>console.warn('Статистика профілю:', error.code));
+    }
+    startNoticeWatch();
+    if (['profile', 'settings'].includes(currentPage)) await loadPeople();
     activity.pulse();
     if (currentPage === "editor") prepareEditor();
     expiredTimers(ongoing(), notifiedTimers);
     render();
+    if (currentPage === 'profile' && S.people?.person?.customId && (requestedProfileNumber() || new URLSearchParams(location.search).has('uid'))) {
+      window.history.replaceState(null, '', profileURL(S.people.person.customId) + location.hash);
+    }
+    if (location.hash.startsWith('#comment-')) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView({ block: 'center' });
     if (requestedShare()) await openIncomingShare();
   } catch (e) {
     shell(`

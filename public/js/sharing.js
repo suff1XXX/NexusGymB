@@ -6,7 +6,8 @@ export function shareableProgram(input) {
   const program = { name: input.name, type: input.type, days: copy(input.days) };
   for (const key of ["scope", "builderMode", "scheduleMode"]) if (input[key]) program[key] = input[key];
   program.days = program.days.map((day) => ({ weekday: day.weekday, name: day.name, groups: day.groups,
-    ...(day.description ? { description: day.description } : {}), items: day.items.map((item) => {
+    ...(day.description ? { description: day.description } : {}),
+    ...(day.warmup ? { warmup: day.warmup } : {}), items: day.items.map((item) => {
       const result = {};
       for (const key of ["name", "sets", "reps", "seconds", "weight", "rest", "note", "metrics", "setPlans", "builderFeatures"])
         if (item[key] !== undefined) result[key] = copy(item[key]);

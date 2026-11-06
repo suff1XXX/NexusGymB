@@ -1,8 +1,8 @@
-const CACHE = "nexus-shell-v3";
+const CACHE = "nexus-shell-v13";
 const base = new URL('./', self.location.href);
-const files = ['index.html','home.html','program.html','profile.html','workout.html','editor.html','exercises.html','admin.html','styles.css','favicon.svg',
+const files = ['index.html','home.html','program.html','profile.html','settings.html','workout.html','editor.html','exercises.html','admin.html','styles.css','favicon.svg',
   'js/theme.js','js/app.js','js/model.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/drafts.js',
-  'js/training-data.js','js/offline.js','js/history.js','js/backup.js','js/notifications.js','js/activity.js','js/sharing.js'];
+  'js/training-data.js','js/offline.js','js/history.js','js/backup.js','js/notifications.js','js/activity.js','js/sharing.js','js/fitness.js','js/people.js','js/profile-data.js','js/routes.js','js/user-tags.js','js/workout-recovery.js','js/training-invites.js','js/profile-image-editor.js','js/community-safety.js','js/body-measurements.js','js/workout-summary.js'];
 const sdk = ['firebase-app.js','firebase-auth.js','firebase-firestore.js'].map((file) => `https://www.gstatic.com/firebasejs/11.10.0/${file}`);
 self.addEventListener('install', (event) => event.waitUntil((async () => {
   const cache = await caches.open(CACHE);
@@ -18,10 +18,11 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   const rootPage = url.origin === base.origin && url.pathname === base.pathname;
-  const local = rootPage || url.origin === base.origin && url.pathname.startsWith(base.pathname) && /\.(html|js|css|svg)$/.test(url.pathname);
+  const userRoute = url.origin === base.origin && url.pathname.startsWith(base.pathname) && /\/(?:public\/)?u\/[1-9][0-9]{0,11}\/?$/.test(url.pathname);
+  const local = userRoute || rootPage || url.origin === base.origin && url.pathname.startsWith(base.pathname) && /\.(html|js|css|svg)$/.test(url.pathname);
   const library = url.origin === 'https://www.gstatic.com' && url.pathname.startsWith('/firebasejs/11.10.0/');
   if (!local && !library) return;
-  const cacheKey = rootPage ? new URL('index.html', base).href : local ? url.origin + url.pathname : event.request;
+  const cacheKey = userRoute ? new URL('profile.html', base).href : rootPage ? new URL('index.html', base).href : local ? url.origin + url.pathname : event.request;
   event.respondWith((async () => {
     const cache = await caches.open(CACHE);
     try {

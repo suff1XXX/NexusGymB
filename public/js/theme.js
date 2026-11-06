@@ -1,8 +1,8 @@
-var themePreference = "Системна";
-try { themePreference = localStorage.getItem("nexus:theme") || "Системна"; } catch {}
+var themePreference = "Світла";
+try { themePreference = localStorage.getItem("nexus:theme") || "Світла"; } catch {}
 var systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
 function applyTheme(preference, save = true) {
-  themePreference = ["Світла", "Темна", "Системна"].includes(preference) ? preference : "Системна";
+  themePreference = ["Світла", "Темна", "Системна"].includes(preference) ? preference : "Світла";
   const dark = themePreference === "Темна" || themePreference === "Системна" && systemTheme.matches;
   document.documentElement.dataset.theme = dark ? "dark" : "light";
   document.querySelector('meta[name="color-scheme"]')?.setAttribute("content", dark ? "dark" : "light");

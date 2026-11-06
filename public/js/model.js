@@ -53,6 +53,7 @@ export function newSession(program, day) {
     dayId: day.weekday,
     name: day.name,
     description: day.description || "",
+    warmup: day.warmup || "",
     date: localDate(),
     startedAt: Date.now(),
     endedAt: 0,
@@ -170,6 +171,7 @@ export function validProgram(p) {
         typeof d.groups === "string" &&
         d.groups.length <= 200 &&
         (d.description === undefined || (typeof d.description === "string" && d.description.length <= 4000)) &&
+        (d.warmup === undefined || (typeof d.warmup === "string" && d.warmup.length <= 2000)) &&
         Array.isArray(d.items) &&
         d.items.length <= 30 &&
         d.items.every(
@@ -195,7 +197,10 @@ export function validProgram(p) {
     )
   );
 }
-export function completeSet(session, reps, weight, metrics = []) {
+export function workingSetCount(session, index = session.index) {
+  return session.logs.filter((l) => l.index === index && !l.warmup).length;
+}
+export function completeSet(session, reps, weight, metrics = [], warmup = false) {
   const s = copy(session),
     item = s.items[s.index];
   if (s.status !== "active" || !item) throw Error("Вправу не знайдено");
@@ -203,7 +208,7 @@ export function completeSet(session, reps, weight, metrics = []) {
     !Number.isInteger(reps) ||
     !bounded(reps, 1000) ||
     !bounded(weight, 1000) ||
-    !validMetrics(metrics)
+    !validMetrics(metrics) || typeof warmup !== "boolean"
   )
     throw Error("Перевір значення підходу");
   const planned = item.metrics || [];
@@ -212,10 +217,13 @@ export function completeSet(session, reps, weight, metrics = []) {
     metrics.some((m, k) => m.name !== planned[k].name || m.unit !== planned[k].unit)
   )
     throw Error("Параметри не відповідають вправі");
-  if (s.logs.filter((l) => l.index === s.index).length >= item.sets)
+  if (!warmup && workingSetCount(s) >= item.sets)
     throw Error("Усі підходи вже виконано");
-  const plan = setPlan(item, s.logs.filter((l) => l.index === s.index).length);
+  if (warmup && s.logs.filter((l) => l.index === s.index && l.warmup).length >= 20)
+    throw Error("Можна записати до 20 розминочних підходів на вправу.");
+  const plan = setPlan(item, Math.min(workingSetCount(s), item.sets - 1));
   s.logs.push({ index: s.index, reps, weight, seconds: plan.seconds, metrics: copy(metrics), at: Date.now() });
+  if (warmup) s.logs.at(-1).warmup = true;
   s.timerEnd = 0;
   s.restEnd = Date.now() + plan.rest * 1000;
   return s;
@@ -231,4 +239,13 @@ export function advance(session, skip = false) {
     s.endedAt = Date.now();
   }
   return s;
+}
+export function finishEarly(session) {
+  if (session?.status !== 'active') throw Error('Немає активного тренування.');
+  const s = copy(session);
+  s.items.forEach((item, index) => {
+    if (workingSetCount(s, index) < item.sets && !s.skipped.includes(index)) s.skipped.push(index);
+  });
+  return { ...s, status: 'completed', endedEarly: true, index: s.items.length,
+    endedAt: Date.now(), timerEnd: 0, restEnd: 0 };
 }

@@ -2,6 +2,7 @@ import { validProgram, copy } from "./model.js";
 import { exerciseData } from "./import.js";
 import { performanceData } from "./performance.js";
 import { validSession } from "./history.js";
+import { measurementData } from './body-measurements.js';
 
 export function parseBackup(text) {
   if (text.length > 15000000) throw Error("Резервна копія завелика. Максимум 15 МБ.");
@@ -29,13 +30,20 @@ export function parseBackup(text) {
         (p.rating != null && (!Number.isInteger(p.rating) || p.rating < 0 || p.rating > 5))) throw Error("Некоректні налаштування вправи.");
     return { id, favorite: !!p.favorite, rating: p.rating ?? null, ...(p.performance ? { performance: performanceData(p.performance) } : {}) };
   });
-  return { programs, sessions, exercises, preferences };
+  const rawMeasurements = data.measurements ?? [];
+  if (!Array.isArray(rawMeasurements) || rawMeasurements.length > 5000 || !unique(rawMeasurements)) throw Error('Некоректні заміри в резервній копії.');
+  const measurements = rawMeasurements.map((record)=>{
+    const value=measurementData(record);
+    if (record.id !== value.date) throw Error('Некоректний ID запису замірів.');
+    return { id:value.date,...value };
+  });
+  return { programs, sessions, exercises, preferences, measurements };
 }
 
 export function backupEntries(backup, state, uid) {
   const entries = [], skipped = [];
   const current = { programs: state.programs, sessions: state.sessions, exercises: state.exercises.filter((e) => e.personal).map((e) => ({ id: e.id.slice(9) })),
-    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })) };
+    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })), measurements: state.measurements || [] };
   for (const [collection, list] of Object.entries(backup)) for (const record of list) {
     if (current[collection].some((r) => r.id === record.id) || collection === 'sessions' && record.status === 'active' && state.sessions.some((s) => s.status === 'active')) {
       skipped.push(record); continue;

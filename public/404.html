@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Відкриваємо профіль — Nexus GymB</title>
+<script>
+  const route = /^(.*?\/)(?:public\/)?u\/([1-9][0-9]{0,11})\/?$/.exec(location.pathname);
+  if (route) location.replace(route[1] + 'profile.html?number=' + route[2] + location.hash);
+</script></head><body><p>error 404…</p></body></html>

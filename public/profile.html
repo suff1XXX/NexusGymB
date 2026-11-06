@@ -1,6 +1,13 @@
 <!doctype html>
 <html lang="uk">
   <head>
+    <script>
+      const route = /^(.*?\/)(?:public\/)?u\/([1-9][0-9]{0,11})\/?$/.exec(location.pathname);
+      const profileBase = route ? route[1] : location.pathname.slice(0, location.pathname.lastIndexOf('/') + 1);
+      const base = document.createElement('base'); base.href = profileBase; document.head.append(base);
+      const number = new URLSearchParams(location.search).get('number');
+      if (!route && /^[1-9][0-9]{0,11}$/.test(number || '')) history.replaceState(null, '', profileBase + 'u/' + number + location.hash);
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#f5f5f7" />
@@ -15,7 +22,7 @@
     <div id="app"><main class="loading">Завантаження…</main></div>
     <div id="toast" role="status" aria-live="polite"></div>
     <dialog id="modal"></dialog>
-    <noscript>Для роботи увімкни JavaScript.</noscript>
+    <noscript>Для роботи увімкни JavaScript</noscript>
     <script type="module" src="js/app.js"></script>
   </body>
 </html>
