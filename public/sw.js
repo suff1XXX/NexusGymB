@@ -1,7 +1,7 @@
-const CACHE = "nexus-shell-v34";
+const CACHE = "nexus-shell-v37";
 const base = new URL('./', self.location.href);
 const files = ['index.html','home.html','program.html','nutrition.html','nutrition.css','profile.html','settings.html','workout.html','editor.html','exercises.html','admin.html','admin.css','styles.css','favicon.svg','js/admin-stats.js','js/profile-appearance.js',
-  'js/theme.js','js/app.js','js/model.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/rich-editor.bundle.js','js/reaction-interactions.js','js/nutrition.js','js/nutrition-generator.js','js/nutrition-view.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/drafts.js',
+  'js/theme.js','js/app.js','js/model.js','js/workout-modes.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/rich-editor.bundle.js','js/reaction-interactions.js','js/nutrition.js','js/nutrition-generator.js','js/nutrition-view.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/catalog-json.js','js/drafts.js',
   'js/training-data.js','js/manual-sets.js','js/offline.js','js/read-cache.js','js/stats-publication.js','js/history.js','js/backup.js','js/notifications.js','js/activity.js','js/sharing.js','js/fitness.js','js/people.js','js/profile-data.js','js/routes.js','js/user-tags.js','js/workout-recovery.js','js/training-invites.js','js/profile-image-editor.js','js/community-safety.js','js/body-measurements.js','js/workout-summary.js'];
 const sdk = ['firebase-app.js','firebase-auth.js','firebase-firestore.js'].map((file) => `https://www.gstatic.com/firebasejs/11.10.0/${file}`);
 self.addEventListener('install', (event) => event.waitUntil((async () => {

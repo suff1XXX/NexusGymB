@@ -7,7 +7,7 @@ export function memberDays(createdAt, now = new Date()) {
   return Number.isFinite(date.getTime()) ? Math.max(1, dayNumber(localDate(now)) - dayNumber(localDate(date)) + 1) : 1;
 }
 export function countsAsWorkout(session) {
-  return session.status === 'completed' && (session.logs.some((l) => !l.warmup) ||
+  return session.status === 'completed' && (session.simpleCompleted?.length > 0 || session.logs.some((l) => !l.warmup) ||
     !session.items.length && !!session.description?.trim() && !session.endedEarly);
 }
 // A weekly streak leaves room for rest days. The current week may still be in progress.
@@ -31,7 +31,7 @@ export function personalRecords(sessions) {
   for (const session of sessions.filter((s) => s.status === 'completed')) {
     for (const log of session.logs) {
       const item = session.items[log.index];
-      if (!item || log.warmup || log.reps <= 0) continue;
+      if (!item || log.warmup || log.weightUnknown || log.reps <= 0) continue;
       const key = exerciseKey(item), previous = records.get(key);
       if (!previous || log.weight > previous.weight || log.weight === previous.weight && log.reps > previous.reps)
         records.set(key, { key, name: item.name, weight: log.weight, reps: log.reps, date: session.date });

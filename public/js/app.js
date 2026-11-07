@@ -1,3 +1,5 @@
+import { exportCatalog, catalogImportPlan, catalogJsonLimit } from './catalog-json.js';
+import { parseWeight, weightLabel, simpleDone, saveQuickResult, finishChecklist, alternatives } from './workout-modes.js';
 import {richComposer,mountRichEditors,disposeRichEditors,collectRichComment,renderComment,captureCommentDraft,restoreCommentDraft,clearRichComment} from './rich-editor.bundle.js';
 import {installReactionInteractions} from './reaction-interactions.js';
 import {generatorDefaults,generatorInput,estimateNutrition,generateNutrition} from './nutrition-generator.js';
@@ -128,6 +130,7 @@ let db,
   historyDate = localDate(),
   historyMinutes = 0,
   importDraft = null,
+  catalogJsonDraft = null,
   chosenDay = null,
   busy = false,
   bootError = "",
@@ -1162,13 +1165,13 @@ function catalogResults() {
           ${list
             .map(
               (e) => `
-                <button class="card exercise-card" data-action="detail" data-id="${esc(e.id)}">
+                <div class="catalog-entry"><button class="card exercise-card" data-action="detail" data-id="${esc(e.id)}">
                   ${exercisePhoto(e, "card")}
                   <h3>${esc(e.name)}</h3>
                   ${S.exercisePreferences[e.id]?.favorite ? '<span class="badge">♥ Улюблена</span>' : ""}
                   ${S.exercisePreferences[e.id]?.rating != null ? `<p>Моя оцінка: ${S.exercisePreferences[e.id].rating}/5</p>` : ""}
                   <p>${esc(e.primary)} · ${esc(e.equipment)}${e.personal ? " · Особиста" : ""}</p>
-                </button>
+                </button><div class="actions">${btn('＋ До тренування','catalog-add',`data-id="${esc(e.id)}"`,'secondary')}${btn('Прогрес','exercise-progress',`data-id="${esc(e.id)}"`,'ghost')}</div></div>
               `,
             )
             .join("")}
@@ -1301,6 +1304,28 @@ function setPlanEditor(item, n, j) {
       ${field("Відпочинок, сек", `plan-rest-${n}-${j}-${k}`, p.rest, "number", 'required min="0" max="600"')}
     </div></fieldset>`).join("") : ""}</div>`;
 }
+
+function openCatalogJson(targetId = '', text = '') {
+  if (!owner()) throw Error('Немає доступу.');
+  const target = targetId ? S.exercises.find(e=>e.id===targetId && !e.personal) : null;
+  if (targetId && !target) throw Error('Вправу не знайдено.');
+  const example = target ? exportCatalog([target]) : {exercises:[{name:'Жим гантелей',primary:'Груди',equipment:'Гантелі',technique:'Опис техніки'}]};
+  openModal(`<div class="sectionhead"><h2>${target ? `Оновити JSON · ${esc(target.name)}` : 'Додати / оновити вправи з JSON'}</h2>${btn('Закрити','close','','ghost')}</div><p class="muted">Обери файл або встав JSON. Наявні вправи визначаються за id, без id — за унікальною назвою. Пропущені поля зберігаються; порожній рядок очищає поле. Вправи, яких немає у файлі, залишаються в каталозі.</p><form id="catalog-json-form" data-target="${esc(targetId)}"><label>Файл JSON<input id="catalog-json-file" type="file" accept=".json,application/json" /></label><p class="small muted" id="catalog-json-file-status" role="status">До 15 МБ, до 5000 вправ.</p><label>JSON<textarea name="json" rows="12" required maxlength="15000000" spellcheck="false">${esc(text)}</textarea></label><details><summary>Приклад формату</summary><pre class="json-preview">${esc(JSON.stringify(example,null,2))}</pre></details><button class="btn" type="submit">Перевірити зміни</button><div class="form-error" role="alert"></div></form>`);
+}
+function previewCatalogJson(text, targetId) {
+  const plan = catalogImportPlan(text,S.exercises,targetId);
+  catalogJsonDraft = {text,targetId,plan:plan.map(entry=>({...entry,id:entry.id || crypto.randomUUID()})),saved:0};
+  const count = kind => plan.filter(entry=>entry.action===kind).length;
+  const labels = {create:'Додати',update:'Оновити',unchanged:'Без змін'};
+  openModal(`<h2>Перевір зміни каталогу</h2><p>Нових: ${count('create')}. Оновлень: ${count('update')}. Без змін: ${count('unchanged')}.</p><p class="small muted">Наявні вправи збережуть свої ID та зв’язки з програмами й історією. Збережені раніше знімки інструкцій у тренуваннях залишаться як були.</p><ul>${plan.slice(0,100).map(entry=>`<li><strong>${labels[entry.action]}:</strong> ${esc(entry.data.name)}${entry.action==='update' ? ` · поля: ${esc(entry.changed.join(', '))}` : ''}</li>`).join('')}</ul>${plan.length>100?`<p>Показано перші 100 із ${plan.length} записів.</p>`:''}<p id="catalog-json-save-status" role="status"></p><div class="actions">${btn('Зберегти зміни','save-catalog-json',count('create')+count('update') ? '' : 'disabled')}${btn('Назад до JSON','back-catalog-json','','secondary')}${btn('Скасувати','close','','ghost')}</div>`);
+}
+function downloadCatalogJson() {
+  if (!owner()) throw Error('Немає доступу.');
+  const url = URL.createObjectURL(new Blob([JSON.stringify(exportCatalog(S.exercises),null,2)],{type:'application/json;charset=utf-8'}));
+  const link=document.createElement('a');link.href=url;link.download=`nexus-gymb-exercises-${localDate()}.json`;
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
 function openImport() {
   openModal(`<div class="sectionhead"><h2>Імпорт JSON</h2>${btn("Закрити", "close", "", "ghost")}</div>
     <p class="muted">Встав JSON за наведеним прикладом. Можна імпортувати вправи, шаблони програм або обидва типи записів. Імпорт створює нові записи.</p>
@@ -1592,11 +1617,12 @@ function collectEditor() {
 function setLogLabel(logs, position) {
   const log = logs[position];
   const number = logs.slice(0, position + 1).filter((l) => l.index === log.index && !!l.warmup === !!log.warmup).length;
+  if (log.quickResult) return "Найкращий результат за тренування";
   return `${log.warmup ? "Розминочний підхід" : "Робочий підхід"} ${number}`;
 }
 function previousWorkout(item, session) {
   const previous = previousResults(S.sessions, item, session.id);
-  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
+  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
 }
 function progressView() {
   const analytics = progressSessions(S.sessions, S.manualSets);
@@ -1687,7 +1713,7 @@ function historyEditForm(s) {
     ${field("Назва", "name", s.name, "text", 'required maxlength="100"')}
     <div class="formgrid">${field("Дата", "date", s.date, "date", `required max="${localDate()}"`)}${field("Тривалість, хв", "minutes", Math.round((s.endedAt - s.startedAt) / 60000), "number", 'required min="0" max="1440"')}</div>
     <label>Опис<textarea name="description" rows="3" maxlength="4000">${esc(s.description || "")}</textarea></label>
-    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · ${setLogLabel(s.logs, k)}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага, кг", `log-weight-${k}`, l.weight, "number", 'required min="0" max="1000" step="0.5"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
+    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · ${setLogLabel(s.logs, k)}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага: кг або плитки", `log-weight-${k}`, l.weightText || l.weight, "text", 'required maxlength="30"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
     <div class="actions"><button type="submit" class="btn">Зберегти виправлення</button>${btn("Скасувати", "close", 'type="button"', "ghost")}</div><div class="form-error" role="alert"></div></form>`);
 }
 function restorePreview() {
@@ -2084,7 +2110,7 @@ function startNoticeWatch() {
 }
 function summaryScreen(session) {
   const stats=workoutSummary(session,S.sessions);
-  return `<div class="workout-summary">${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`)}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Ще одне тренування позаду'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section><section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Цього разу без нових рекордів. Кожне тренування додає досвіду.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
+  return `<div class="workout-summary">${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`)}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Ще одне тренування позаду'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">Обсяг — за записаними підходами, без дублювання найкращих результатів.</p><p class="small muted">${stats.quickResults ? `${stats.quickResults} найкращих результатів · ` : ''}${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section><section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Цього разу без нових рекордів. Кожне тренування додає досвіду.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
 }
 function editMeasurement(id = '') {
   const record=S.measurements.find((m)=>m.id===id);
@@ -2104,6 +2130,40 @@ function measurementChart(points,unit) {
   return `<svg class="progress-chart" viewBox="0 0 660 240" role="img" aria-label="Графік замірів, ${unit}">${[0,0.5,1].map((fraction)=>{const value=min+(max-min)*fraction;return `<line class="chart-grid" x1="60" x2="600" y1="${y(value)}" y2="${y(value)}"/><text x="52" y="${y(value)+4}" text-anchor="end">${Math.round(value*10)/10}</text>`;}).join('')}<polyline class="chart-line" points="${points.map((p,index)=>`${x(index)},${y(p.value)}`).join(' ')}"/>${points.map((p,index)=>`<circle class="chart-point" cx="${x(index)}" cy="${y(p.value)}" r="4"><title>${p.date}: ${p.value} ${unit}</title></circle>`).join('')}<text x="60" y="220">${points[0].date}</text>${points.length>1?`<text x="600" y="220" text-anchor="end">${lastDate(points)}</text>`:''}</svg>`;
 }
 function lastDate(points) { return points.at(-1).date; }
+
+function executionControls(s) {
+  return `<section class="card execution-controls"><label>Режим виконання<select id="execution-mode">${[['simple','Простий'],['advanced','Розширений'],['mixed','Змішаний']].map(([key,label]) => `<option value="${key}" ${(s.executionMode || 'advanced') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><p class="small muted">Простий — список і необов’язковий найкращий результат. Розширений — кожен підхід і таймери. Змішаний — обирай для кожної вправи.</p></section>`;
+}
+function checklistView(s) {
+  return `<div class="session">${heading(s.name,'Виконуй вправи за списком',btn('Згорнути','route','data-id="home"','ghost'))}${executionControls(s)}${workoutDescription(s)}<p class="muted">Позначай виконані вправи. Вагу та повторення можна записувати лише тоді, коли хочеш зберегти результат.</p><div class="workout-checklist">${s.items.map((item,index) => {
+    const done = s.simpleCompleted?.includes(index) || s.logs.filter(l => l.index === index && !l.warmup && !l.quickResult).length >= item.sets;
+    const logs = s.logs.filter(l => l.index === index);
+    return `<section class="card checklist-item ${done ? 'is-done' : ''}"><div class="sectionhead"><h2>${index+1}. ${esc(item.name)}</h2>${btn(done ? '✓ Виконано' : 'Позначити виконаною','simple-done',`data-index="${index}" aria-pressed="${!!done}"`,'secondary')}</div>${item.note ? `<p>${esc(item.note)}</p>` : ''}<p class="small muted">План: ${item.sets} підх. ${item.reps ? `· ${esc(item.reps)} повторень` : ''}${item.seconds ? ` · ${item.seconds} сек` : ''}${item.weight ? ` · ${item.weight} кг` : ''}</p>${logs.map(l=>`<p class="small">${l.quickResult ? 'Найкращий результат' : l.warmup ? 'Розминка' : 'Підхід'}: ${esc(weightLabel(l))} × ${l.reps}</p>`).join('')}<div class="actions">${btn('Записати результат','quick-result',`data-index="${index}"`,'secondary')}${item.exerciseId ? btn('Як виконувати','detail',`data-id="${esc(item.exerciseId)}" data-session="1"`,'ghost') : ''}${!logs.length && !done ? btn('Замінити','workout-alternatives',`data-index="${index}"`,'ghost') : ''}${s.executionMode === 'mixed' ? btn('Облік підходів','workout-detail',`data-index="${index}"`,'ghost') : ''}</div></section>`;
+  }).join('')}</div>${btn('✓ Завершити тренування','finish-checklist','','wide')}</div>`;
+}
+function alternativePanel(source, index) {
+  source = {...source, equipment:source.equipment || source.snapshot?.equipment || S.exercises.find(e=>e.id===source.exerciseId)?.equipment};
+  const list = alternatives(S.exercises, source);
+  const equipment = [...new Set(list.map(e=>e.equipment).filter(Boolean))];
+  return `<details class="exercise-alternatives" ${index !== undefined ? 'open' : ''}><summary>Альтернативні вправи · ${list.length}</summary><p class="small muted">Та сама основна м’язова група. Спочатку — вправи з таким самим обладнанням. Перевір техніку й налаштуй навантаження для заміни.</p><label>Доступне обладнання<select data-alternative-equipment><option value="">Усе</option>${equipment.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('')}</select></label>${list.map(e=>`<div class="alternative-row" data-equipment="${esc(e.equipment || '')}"><span><strong>${esc(e.name)}</strong><small>${esc(e.equipment)}</small></span>${btn(index === undefined ? 'Переглянути' : 'Обрати',index === undefined ? 'detail' : 'replace-exercise',`data-id="${esc(e.id)}" ${index === undefined ? '' : `data-index="${index}"`}`,'ghost')}</div>`).join('') || '<p class="muted">У каталозі ще немає альтернатив для цієї групи.</p>'}</details>`;
+}
+function addExercisePicker(id) {
+  const e = S.exercises.find(e=>e.id===id && !e.archived);
+  if (!e) throw Error('Вправу не знайдено.');
+  const programs = S.programs.filter(p=>!p.archived && (p.scope !== 'home' || S.homeAccess || owner()));
+  const targets = programs.flatMap(p=>p.days.map((d,index)=>`<option value="program|${esc(p.id)}|${index}">${esc(p.name)} · ${esc(d.name)}</option>`));
+  if (ongoing()) targets.unshift('<option value="active">Поточне активне тренування</option>');
+  openModal(`<h2>Додати · ${esc(e.name)}</h2>${targets.length ? `<form id="catalog-add-form" data-exercise="${esc(id)}"><label>Куди додати<select name="target" required>${targets.join('')}</select></label><p class="small muted">Параметри за замовчуванням: 3 підходи по 10–12 повторень. Їх можна змінити в редакторі програми.</p><button class="btn" type="submit">Додати вправу</button><div class="form-error" role="alert"></div></form>` : `<p>Спочатку створи програму з днем тренування.</p>${btn('Створити програму','route','data-id="editor"','secondary')}`}`);
+}
+function exerciseProgress(id) {
+  const e = S.exercises.find(e=>e.id===id);
+  if (!e) throw Error('Вправу не знайдено.');
+  const item = {exerciseId:id,name:e.name}, analytics=progressSessions(S.sessions,S.manualSets);
+  const matches = analytics.filter(s=>s.status==='completed').flatMap(s=>s.logs.filter(l=>!l.warmup && s.items[l.index] && exerciseKey(s.items[l.index])===exerciseKey(item)).map(log=>({date:s.date,at:log.at || s.endedAt || 0,log}))).sort((a,b)=>b.date.localeCompare(a.date)||b.at-a.at);
+  const record=personalRecords(analytics).find(r=>r.key===id), points=progressSeries(analytics,{key:id});
+  openModal(`<h2>Мій прогрес · ${esc(e.name)}</h2><span class="private-label">Бачиш тільки ти</span>${matches.length ? `<p>Останній результат: <strong>${esc(weightLabel(matches[0].log))} × ${matches[0].log.reps}</strong> · ${esc(matches[0].date)}</p>` : '<p class="muted">Ще немає записаних результатів для цієї вправи.</p>'}${record ? `<p class="record-badge">🏆 Рекорд: ${record.weight} кг × ${record.reps}</p>` : ''}${points.length ? progressChart(points,'кг') : ''}<p class="small muted">Графік показує найбільшу відому вагу за день. Записи з невідомою вагою залишаються в історії нижче.</p>${matches.slice(0,20).map(({date,log})=>`<p>${esc(date)} · ${esc(weightLabel(log))} × ${log.reps}</p>`).join('')}`);
+}
+
 function sessionView() {
   const summary = S.sessions.find((session)=>session.id === S.summaryId && session.status === 'completed');
   if (summary) return summaryScreen(summary);
@@ -2116,6 +2176,7 @@ function sessionView() {
     );
   if (s.warmup?.trim() && !s.warmupDone) return `<div class="session">${heading(s.name, 'Перед тренуванням', btn('Згорнути', 'route', 'data-id="home"', 'ghost'))}<section class="card warmup-card"><span class="eyebrow">Розминка</span><h2>Підготуйся до тренування</h2><p class="workout-description">${esc(s.warmup)}</p><div class="actions">${btn('✓ Розминку виконано', 'warmup-done')}${btn('Пропустити розминку', 'warmup-skip', '', 'ghost')}</div></section></div>`;
   if (!s.items.length) return `<div class="session">${heading(s.name, "Тренування словами", btn("Згорнути", "route", 'data-id="home"', "ghost"))}<section class="card">${workoutDescription(s)}<p class="small muted">Після виконання збережи тренування в історію.</p>${btn("✓ Завершити тренування", "finish-text", "", "wide")}</section></div>`;
+  if (s.executionMode === 'simple' || s.executionMode === 'mixed' && !s.detailedIndex?.includes(s.index)) return checklistView(s);
   const i = s.items[s.index],
     count = workingSetCount(s),
     plan = setPlan(i, Math.min(count, i.sets - 1));
@@ -2127,6 +2188,8 @@ function sessionView() {
         btn("Згорнути", "route", 'data-id="home"', "ghost"),
       )}
       <div class="progress"><div style="width:${(s.index / s.items.length) * 100}%"></div></div>
+      ${executionControls(s)}
+      ${s.executionMode === 'mixed' ? btn('← Список вправ','workout-list','','secondary') : ''}
       ${soundControls()}
       ${workoutDescription(s)}
       <section class="card">
@@ -2151,6 +2214,7 @@ function sessionView() {
           `data-id="${esc(i.exerciseId)}" data-session="1"`,
           "secondary",
         ) : ""}
+        ${!s.logs.some(l=>l.index===s.index) && !s.simpleCompleted?.includes(s.index) ? btn('Замінити вправу','workout-alternatives',`data-index="${s.index}"`,'ghost') : ''}
         <div class="setdots">
           ${Array.from(
             { length: i.sets },
@@ -2159,7 +2223,7 @@ function sessionView() {
             `,
           ).join("")}
         </div>
-        ${s.logs.some((l) => l.index === s.index) ? `<div class="notice"><strong>Виконані підходи</strong>${s.logs.map((l, k) => l.index === s.index ? `<p class="small">${setLogLabel(s.logs, k)}: ${l.reps} повторень · ${l.weight} кг</p>` : "").join("")}</div>` : ""}
+        ${s.logs.some((l) => l.index === s.index) ? `<div class="notice"><strong>Виконані підходи</strong>${s.logs.map((l, k) => l.index === s.index ? `<p class="small">${setLogLabel(s.logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}</p>` : "").join("")}</div>` : ""}
         ${previousWorkout(i, s)}
         ${(() => { const record = personalRecords(S.sessions).find((r) => r.key === exerciseKey(i)); return record ? `<p class="record-badge">🏆 Твій рекорд: ${record.weight} кг × ${record.reps}</p>` : ''; })()}
         ${
@@ -2190,11 +2254,11 @@ function sessionView() {
               "number",
               'min="0" max="1000" required',
             )}${field(
-              "Вага, кг",
+              "Вага: кг або плитки",
               "weight",
               plan.weight,
-              "number",
-              'min="0" max="1000" step="0.5" required',
+              "text",
+              'maxlength="30" placeholder="60, 6x10 або 6x?" required',
             )}
           </div>
           <button class="btn wide" type="submit" ${count >= i.sets ? "disabled" : ""}>
@@ -2241,6 +2305,7 @@ function sessionView() {
 }
 function adminRecordActions(record, kind) {
   const buttons = btn("Змінити", `edit-${kind}`, `data-id="${esc(record.id)}"`, "ghost") +
+    (kind === 'exercise' ? btn('Оновити JSON','open-catalog-json',`data-id="${esc(record.id)}"`,'ghost') : '') +
     btn(record.archived ? "Відновити" : "Архівувати", `archive-${kind}`, `data-id="${esc(record.id)}"`, "ghost") +
     btn("Видалити", `delete-${kind}`, `data-id="${esc(record.id)}"`, "ghost danger");
   return `<div class="actions admin-desktop-actions">${buttons}</div>
@@ -2320,7 +2385,7 @@ async function adminUser(id) {
     ${sessions.length ? [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) => `<details class="user-program"><summary>${esc(s.date)} · ${esc(s.name)} · ${s.status === "planned" ? "Заплановано" : s.status === "completed" ? "Завершено" : "Триває"}</summary>
       <p class="small muted">${s.logs?.length || 0} підходів${s.endedAt ? ` · ${Math.max(0, Math.round((s.endedAt - s.startedAt) / 60000))} хв` : ""}</p>
       ${workoutDescription(s)}
-      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k, logs) => `<p>${setLogLabel(logs, k)}: ${l.reps} повторень · ${l.weight} кг${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}</section>`, "admin-member-title", "admin-user-dialog");
+      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k, logs) => `<p>${setLogLabel(logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}</section>`, "admin-member-title", "admin-user-dialog");
 }
 function adminCatalogControls() {
   const f = S.adminCatalog;
@@ -2373,8 +2438,8 @@ function admin() {
           <div id="admin-users-list">${S.adminUsers.length ? adminUsersList() : '<p class="muted">Завантаж список, щоб переглянути користувачів.</p>'}</div>
         </section>`;
   const catalog=`<section class="card">
-          <h2>Наповнення каталогу</h2>${btn("Імпорт JSON", "open-import", "", "secondary")}
-          <p class="muted">Додавай власні вправи вручну або імпортуй їх у форматі JSON.</p>
+          <h2>Наповнення каталогу</h2><div class="actions">${btn("Експорт усіх вправ JSON", "export-catalog-json", "", "secondary")}${btn("Додати / оновити з JSON", "open-catalog-json", "", "secondary")}${btn("Імпорт вправ і шаблонів", "open-import", "", "ghost")}</div>
+          <p class="muted">Експорт містить усі вправи Global, включно з архівом, незалежно від фільтрів. JSON дозволяє додати нові або оновити наявні вправи.</p>
           <div class="actions">
             ${btn("＋ Додати вправу", "new-exercise")}
           </div>
@@ -2590,6 +2655,8 @@ function detail(id, fromSession = false) {
       ${[["overview", "Огляд"], ...(catalogExercise ? [["private", "Для мене"]] : []), ...(catalogExercise && !catalogExercise.personal ? [["community", "Спільнота"]] : [])].map(([tab, title], index) => `<button type="button" role="tab" id="tab-${tab}" aria-controls="panel-${tab}" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}" data-action="detail-tab" data-panel="panel-${tab}">${title}</button>`).join("")}
     </div>
     <section role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
+    ${catalogExercise && !e.archived ? `<div class="actions">${btn('＋ До тренування','catalog-add',`data-id="${esc(id)}"`,'secondary')}${btn('Мій прогрес','exercise-progress',`data-id="${esc(id)}"`,'ghost')}</div>` : ''}
+    ${alternativePanel({...e, exerciseId:id})}
     ${exercisePhoto({ ...e, exerciseId: id }, "large")}<div class="detail-instructions">${[
       ["Обладнання", e.equipment],
       ["М’язи", `${e.primary}${e.secondary ? " · " + e.secondary : ""}`],
@@ -2747,6 +2814,63 @@ async function action(a, b) {
     n = +b.dataset.n,
     j = +b.dataset.j;
   switch (a) {
+    case 'export-catalog-json': downloadCatalogJson(); break;
+    case 'open-catalog-json': catalogJsonDraft=null; openCatalogJson(id || ''); break;
+    case 'back-catalog-json':
+      if (!owner() || !catalogJsonDraft) throw Error('Спочатку перевір JSON.');
+      if (catalogJsonDraft.saved) throw Error('Частину змін уже збережено. Заверши поточне збереження.');
+      openCatalogJson(catalogJsonDraft.targetId,catalogJsonDraft.text); break;
+    case 'save-catalog-json': {
+      if (!owner() || !catalogJsonDraft) throw Error('Спочатку перевір JSON.');
+      const draft=catalogJsonDraft, changes=draft.plan.filter(entry=>entry.action!=='unchanged');
+      if (!changes.length) throw Error('Немає змін для збереження.');
+      try {
+        for (let offset=draft.saved; offset<changes.length; offset+=100) {
+          await db.saveMany(changes.slice(offset,offset+100).map(entry=>[`exercises/${entry.id}`,{...entry.data,updatedAt:Date.now()}]));
+          draft.saved=Math.min(offset+100,changes.length);
+          const status=document.querySelector('#catalog-json-save-status');if(status)status.textContent=`Збережено ${draft.saved} із ${changes.length}.`;
+        }
+        await refresh();catalogJsonDraft=null;modal.close();render();toast('Каталог оновлено з JSON');
+      } catch (error) {
+        throw Error(`Збережено ${draft.saved} із ${changes.length}. ${err(error)} Натисни «Зберегти зміни», щоб повторити решту.`);
+      }
+      break;
+    }
+
+    case 'catalog-add': addExercisePicker(id); break;
+    case 'exercise-progress': exerciseProgress(id); break;
+    case 'quick-result': {
+      const session = ongoing(), index = +b.dataset.index;
+      const log = session?.logs.find(l => l.index === index && l.quickResult);
+      openModal(`<h2>Найкращий результат · ${esc(session.items[index].name)}</h2><p class="muted">Один необов’язковий запис за вправу. Повторне збереження оновить його.</p><form id="quick-result-form" data-index="${index}"><div class="formgrid">${field('Вага: кг або плитки','weight',log?.weightText || log?.weight || '', 'text','required maxlength="30" placeholder="60, 6x10 або 6x?"')}${field('Повторення','reps',log?.reps || '', 'number','required min="1" max="1000"')}</div><p class="small muted">6x10 = 6 плиток по 10 кг. 6x? = 6 плиток невідомої ваги; збережеться без перерахунку в кг.</p><button class="btn" type="submit">Зберегти результат</button><div class="form-error" role="alert"></div></form>`);
+      break;
+    }
+    case 'simple-done': await saveSession(simpleDone(ongoing(), +b.dataset.index)); break;
+    case 'finish-checklist': {
+      const current = ongoing(), result = finishChecklist(current);
+      if (result.skipped.length && !confirm('Є непозначені вправи. Завершити тренування та залишити їх пропущеними?')) return;
+      await saveSession(result); break;
+    }
+    case 'workout-list': {
+      const s = copy(ongoing()); s.detailedIndex = []; await saveSession(s); break;
+    }
+    case 'workout-detail': {
+      const s = copy(ongoing()); s.index = +b.dataset.index; s.detailedIndex = [s.index]; await saveSession(s); break;
+    }
+    case 'replace-exercise': {
+      const s = copy(ongoing()), index = +b.dataset.index;
+      if (!s?.items[index] || s.logs.some(l => l.index === index) || s.simpleCompleted?.includes(index)) throw Error('Замінити можна вправу, для якої ще немає результатів.');
+      const e = S.exercises.find(e => e.id === id && !e.archived);
+      if (!e) throw Error('Вправу не знайдено.');
+      s.items[index] = { ...s.items[index], exerciseId:e.id, name:e.name, primary:e.primary, snapshot:stripId(e), custom:false, weight:0 };
+      if (s.items[index].setPlans) s.items[index].setPlans = s.items[index].setPlans.map(plan=>({...plan,weight:0}));
+      await saveSession(s); modal.close(); break;
+    }
+    case 'workout-alternatives': {
+      const s = ongoing(), index = +b.dataset.index;
+      openModal(`<h2>Заміна · ${esc(s.items[index].name)}</h2>${alternativePanel(s.items[index], index)}`); break;
+    }
+
     case 'show-workout-summary': modal.close(); navigate('session',`?summary=${encodeURIComponent(id)}`); break;
     case 'new-measurement': editMeasurement(); break;
     case 'edit-measurement': editMeasurement(id); break;
@@ -2880,7 +3004,7 @@ async function action(a, b) {
       if (!previous) throw Error('Попереднього робочого підходу немає.');
       const form = document.querySelector('#set-form');
       form.elements.reps.value = previous.reps;
-      form.elements.weight.value = previous.weight;
+      form.elements.weight.value = previous.weightText || previous.weight;
       (item.metrics || []).forEach((metric, index) => {
         const value = previous.metrics?.find((m) => m.name === metric.name && m.unit === metric.unit);
         if (value) form.elements[`actual-metric-${index}`].value = value.value;
@@ -3218,13 +3342,13 @@ async function action(a, b) {
                     : ""
                 }
               </h3>
+              ${s.simpleCompleted?.includes(k) ? '<p class="small">✓ Виконано за списком</p>' : ''}
               ${s.logs
                 .filter((l) => l.index === k)
                 .map(
                   (l, n, logs) => `
                     <p class="small">
-                      ${setLogLabel(logs, n)} · ${l.reps} повторень · ${l.weight}
-                      кг${l.seconds ? ` · ${l.seconds} сек` : i.seconds ? ` · план ${i.seconds} сек` : ""}
+                      ${setLogLabel(logs, n)} · ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : i.seconds ? ` · план ${i.seconds} сек` : ""}
                     </p>
                     ${metricSummary(l.metrics)}
                   `,
@@ -3621,7 +3745,12 @@ async function action(a, b) {
           current.items[current.index].sets
       )
         throw Error("Спочатку заверши підходи або пропусти вправу.");
-      const s = advance(current, a === "skip");
+      let s;
+      if (current.executionMode === 'mixed') {
+        s = copy(current); s.detailedIndex = []; s.restEnd = 0; s.timerEnd = 0;
+        if (a === 'skip') { if (!s.skipped.includes(s.index)) s.skipped.push(s.index); }
+        else s.simpleCompleted = [...new Set([...(s.simpleCompleted || []), s.index])];
+      } else s = advance(current, a === "skip");
       await saveSession(s);
       if (s.status === "completed") toast("Тренування збережено. Хороша робота!");
       break;
@@ -3871,7 +4000,7 @@ document.addEventListener("submit", async (event) => {
     }
     if (f.id === "history-edit-form") {
       const session = S.sessions.find((s) => s.id === f.dataset.id);
-      const logs = session.logs.map((l, k) => ({ ...l, reps: +v.get(`log-reps-${k}`), weight: +v.get(`log-weight-${k}`), seconds: +v.get(`log-seconds-${k}`),
+      const logs = session.logs.map((l, k) => ({ ...l, reps: +v.get(`log-reps-${k}`), ...parseWeight(v.get(`log-weight-${k}`)), seconds: +v.get(`log-seconds-${k}`),
         metrics: (l.metrics || []).map((m, j) => ({ ...m, value: String(v.get(`log-metric-${k}-${j}`) || "").trim() })) }));
       await saveSession(editCompletedSession(session, { name: String(v.get("name")), date: v.get("date"), description: String(v.get("description") || ""), minutes: +v.get("minutes"), logs }));
       modal.close(); toast("Результати виправлено");
@@ -3946,6 +4075,30 @@ document.addEventListener("submit", async (event) => {
       modal.close();
       toast("Дату тренування змінено");
     }
+    if (f.id === 'quick-result-form') {
+      await saveSession(saveQuickResult(ongoing(), +f.dataset.index, +v.get('reps'), v.get('weight')));
+      modal.close(); toast('Результат вправи збережено');
+    }
+    if (f.id === 'catalog-add-form') {
+      const e = S.exercises.find(e => e.id === f.dataset.exercise && !e.archived);
+      if (!e) throw Error('Вправу не знайдено.');
+      const target = String(v.get('target')), [kind, programId, dayIndex] = target.split('|');
+      const item = { exerciseId:e.id, name:e.name, primary:e.primary, sets:3, reps:'10–12', weight:0, seconds:0, rest:60, metrics:[], note:'', snapshot:stripId(e) };
+      if (kind === 'active') {
+        const session = copy(ongoing()); if (!session || session.items.length >= 30) throw Error('Немає активного тренування або вже є 30 вправ.');
+        session.items.push(item); await saveSession(session);
+      } else {
+        const program = copy(S.programs.find(p => p.id === programId && !p.archived));
+        if (!program?.days[+dayIndex]) throw Error('Обери день програми.');
+        requireHomeAccess(program);
+        if (program.days[+dayIndex].items.length >= 30) throw Error('До 30 вправ у тренуванні.');
+        program.days[+dayIndex].items.push(item);
+        if (!validProgram(program)) throw Error('Перевір параметри програми.');
+        await db.save(privatePath(`programs/${program.id}`), {...stripId(program), updatedAt:Date.now()});
+        await refresh(); render();
+      }
+      modal.close(); toast('Вправу додано до тренування');
+    }
     if (f.id === "set-form") {
       const current = ongoing(),
         item = current.items[current.index],
@@ -3956,8 +4109,10 @@ document.addEventListener("submit", async (event) => {
       if (!validMetrics(metrics)) throw Error("Перевір власні параметри вправи.");
       const warmup = event.submitter?.dataset.warmup === "1";
       const record = personalRecords(S.sessions.map((s) => s.id === current.id ? { ...s, status: 'completed' } : s)).find((r) => r.key === exerciseKey(item));
-      const newRecord = !warmup && +v.get('reps') > 0 && (!record || +v.get('weight') > record.weight || +v.get('weight') === record.weight && +v.get('reps') > record.reps);
-      const s = completeSet(current, +v.get("reps"), +v.get("weight"), metrics, warmup);
+      const parsedWeight = parseWeight(v.get('weight'));
+      const newRecord = !warmup && !parsedWeight.weightUnknown && +v.get('reps') > 0 && (!record || parsedWeight.weight > record.weight || parsedWeight.weight === record.weight && +v.get('reps') > record.reps);
+      const s = completeSet(current, +v.get("reps"), parsedWeight.weight, metrics, warmup);
+      Object.assign(s.logs.at(-1), parsedWeight);
       await saveSession(s);
       toast(warmup ? "Розминочний підхід збережено" : newRecord ? '🏆 Новий найкращий результат! Заверши тренування, щоб зберегти рекорд.' : "Підхід збережено");
     }
@@ -4002,6 +4157,10 @@ document.addEventListener("submit", async (event) => {
       modal.close();
       render();
       toast("Вправу збережено");
+    }
+    if (f.id === 'catalog-json-form') {
+      if (!owner()) throw Error('Немає доступу.');
+      previewCatalogJson(String(v.get('json') || ''),f.dataset.target || '');
     }
     if (f.id === "import-form") {
       if (!owner()) throw Error("Немає доступу");
@@ -4057,8 +4216,29 @@ document.addEventListener("input", (event) => {
     document.querySelector("#catalog-results").innerHTML = catalogResults();
   }
 });
-document.addEventListener("change", (event) => {
+document.addEventListener("change", async (event) => {
   const target = event.target;
+  if (target.id === 'catalog-json-file') {
+    const file=target.files?.[0], form=target.form, status=form.querySelector('#catalog-json-file-status'), error=form.querySelector('.form-error');
+    error.textContent=''; if (!file) return;
+    const submit=form.querySelector('button[type="submit"]');submit.disabled=true;
+    try {
+      if (!owner()) throw Error('Немає доступу.');
+      if (file.size>catalogJsonLimit) throw Error('Файл завеликий. Максимум 15 МБ.');
+      const text=await file.text();if(form.isConnected){form.elements.json.value=text;status.textContent=`Завантажено: ${file.name}. Натисни «Перевірити зміни».`;}
+    } catch (e) { error.className='form-error error';error.textContent=err(e); }
+    finally { if(submit.isConnected)submit.disabled=false; }
+    return;
+  }
+  if (target.matches('[data-alternative-equipment]')) {
+    target.closest('.exercise-alternatives').querySelectorAll('.alternative-row').forEach(row=>{row.hidden=!!target.value && row.dataset.equipment!==target.value;}); return;
+  }
+  if (target.id === 'execution-mode') {
+    const session = copy(ongoing());
+    if (!session || !['simple','advanced','mixed'].includes(target.value)) return;
+    session.executionMode = target.value; session.detailedIndex = []; session.restEnd = 0; session.timerEnd = 0;
+    try { await saveSession(session); } catch (error) { toast(error.message); render(); } return;
+  }
   if(target.dataset.nutritionProduct){S.nutritionChecked=target.checked?[...new Set([...(S.nutritionChecked||[]),target.dataset.nutritionProduct])]:(S.nutritionChecked||[]).filter(id=>id!==target.dataset.nutritionProduct);saveNutritionChecks();const count=document.querySelector('[data-shopping-count]');if(count)count.textContent=`Куплено ${S.nutritionChecked.length} із ${S.nutritionResult.groceries.length}`;return;}
   if(target.closest('#nutrition-generator-form')){updateNutritionPreview(target);return;}
   if(target.id==='measurement-metric' || target.id==='measurement-period') {
@@ -4204,6 +4384,10 @@ async function handleUser(user) {
     S.timerSound = preferences?.sound !== false; S.timerVibration = preferences?.vibration === true;
   } catch {}
   modal.close();
+  if (currentPage === 'admin' && (!user || !user.emailVerified)) {
+    location.replace(new URL('home.html', appBase).href);
+    return;
+  }
   if (!user || !user.emailVerified || authPages.includes(currentPage)) {
     render();
     return;
@@ -4213,6 +4397,10 @@ async function handleUser(user) {
     const isOwner = await db.isOwner();
     if (!isCurrent()) return;
     S.isOwner = isOwner;
+    if (currentPage === 'admin' && !isOwner) {
+      location.replace(new URL('home.html', appBase).href);
+      return;
+    }
     const [profile] = await Promise.all([db.profile(user), refresh({ isCurrent })]);
     if (!isCurrent()) return;
     S.profile = profile;

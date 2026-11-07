@@ -11,12 +11,12 @@ export function workoutSummary(session, sessions = []) {
   }).map((r)=>({...r,first:!baseline.has(r.key)}));
   return {
     minutes: Math.max(0,Math.round((session.endedAt-session.startedAt)/60000)),
-    sets:working.length,warmupSets:logs.length-working.length,
-    reps:working.reduce((sum,l)=>sum+l.reps,0),
-    volume:working.reduce((sum,l)=>sum+l.weight*l.reps,0),
-    exercises:new Set(working.map((l)=>l.index)).size,
+    sets:working.filter(l=>!l.quickResult).length,quickResults:working.filter(l=>l.quickResult).length,warmupSets:logs.filter(l=>l.warmup).length,
+    reps:working.filter(l=>!l.quickResult).reduce((sum,l)=>sum+l.reps,0),
+    volume:working.reduce((sum,l)=>sum+(l.weightUnknown || l.quickResult ? 0 : l.weight*l.reps),0),
+    exercises:new Set([...working.map((l)=>l.index), ...(session.simpleCompleted || [])]).size,
     plannedExercises:session.items.length,
-    plannedSets:session.items.reduce((sum,item)=>sum+item.sets,0),
+    plannedSets:session.executionMode === 'simple' ? 0 : session.items.reduce((sum,item)=>sum+item.sets,0),
     records,
   };
 }

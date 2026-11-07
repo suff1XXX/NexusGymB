@@ -1862,3 +1862,21 @@ body[data-background="dynamic"] { background-size:300% 300%;animation:profile-ba
 @keyframes profile-background-flow { 0%,100%{background-position:0% 50%}50%{background-position:100% 50%} }
 @media(max-width:600px){.athlete-profile.profile-custom{padding:12px;border-radius:20px;}}
 @media(prefers-reduced-motion:reduce){.profile-custom[data-background="dynamic"],body[data-background="dynamic"]{animation:none}}
+
+/* Exercise actions and lightweight workout checklist. */
+.catalog-entry { min-width:0;display:flex;flex-direction:column;gap:10px; }
+.catalog-entry .exercise-card { width:100%;flex:1; }
+.catalog-entry > .actions { padding:0 4px 12px;flex-wrap:wrap; }
+.execution-controls { margin-bottom:20px; }
+.execution-controls label { max-width:420px; }
+.workout-checklist { display:grid;gap:16px;margin:20px 0; }
+.workout-checklist .card { margin:0; }
+.checklist-item.is-done { border-color:var(--accent,#52ad83); }
+.checklist-item h2 { font-size:1.15rem;overflow-wrap:anywhere; }
+.checklist-item .actions { flex-wrap:wrap; }
+.exercise-alternatives { margin:20px 0; }
+.exercise-alternatives summary { cursor:pointer;font-weight:600; }
+.alternative-row { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line); }
+.alternative-row[hidden] { display:none; }
+.alternative-row small { display:block; }
+@media(max-width:600px) { .checklist-item .sectionhead { align-items:flex-start;flex-direction:column;gap:12px; } .catalog-entry > .actions .btn { flex:1; } }

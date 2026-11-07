@@ -16,7 +16,7 @@ export function repeatProgram(session) {
   if (session?.status !== "completed" || !hasWorkoutContent(session))
     throw Error("Завершене тренування не знайдено.");
   const items = copy(session.items).map((item, index) => {
-    const logs = session.logs.filter((l) => l.index === index && !l.warmup);
+    const logs = session.logs.filter((l) => l.index === index && !l.warmup && !l.quickResult && !l.weightUnknown);
     if (logs.length) item.setPlans = Array.from({ length: item.sets }, (_, k) => {
       const plan = setPlan(item, k), log = logs[k];
       return log ? { ...plan, reps: String(log.reps), weight: log.weight, seconds: log.seconds ?? plan.seconds } : plan;
@@ -24,6 +24,7 @@ export function repeatProgram(session) {
     return item;
   });
   return { name: session.name, type: "Власна програма",
+    builderMode: session.executionMode === "simple" ? "simple" : session.executionMode === "mixed" ? "cross" : "advanced",
     days: [{ weekday: 0, name: "Тренування", groups: "", description: session.description || "", warmup: session.warmup || "", items }] };
 }
 
@@ -61,7 +62,7 @@ export function progressSeries(sessions, { metric = "weight", key = "", since = 
       byDate.set(month, (byDate.get(month) || 0) + 1);
       continue;
     }
-    const logs = s.logs.filter((l) => !l.warmup && s.items[l.index] && (!key || exerciseKey(s.items[l.index]) === key));
+    const logs = s.logs.filter((l) => !l.warmup && !l.weightUnknown && (metric !== 'volume' || !l.quickResult) && s.items[l.index] && (!key || exerciseKey(s.items[l.index]) === key));
     if (!logs.length) continue;
     const value = metric === "volume" ? logs.reduce((sum, l) => sum + l.weight * l.reps, 0) : Math.max(...logs.map((l) => l.weight));
     byDate.set(s.date, metric === "weight" ? Math.max(byDate.get(s.date) || 0, value) : (byDate.get(s.date) || 0) + value);
@@ -106,13 +107,14 @@ export function exportCsv(state) {
       rows.push(["Тренування", s.name, s.date, s.status, item.name, k + 1, plan.reps, plan.weight, plan.seconds, plan.rest, item.note, JSON.stringify(item.metrics || [])]);
     }
     else {
+      for (const index of s.simpleCompleted || []) rows.push(['Вправа', s.name, s.date, 'Виконано за списком', s.items[index]?.name]);
       const counts = new Map();
       if (!s.logs.length && !s.description) rows.push(["Тренування", s.name, s.date, s.status]);
       for (const log of s.logs) {
-        const key = `${log.index}:${log.warmup ? 'warmup' : 'working'}`;
+        const key = `${log.index}:${log.quickResult ? 'quick' : log.warmup ? 'warmup' : 'working'}`;
         const k = counts.get(key) || 0;
         counts.set(key, k + 1);
-        rows.push(["Тренування", s.name, s.date, s.status, s.items[log.index]?.name, log.warmup ? `Розминочний ${k + 1}` : k + 1, log.reps, log.weight, log.seconds, "", s.items[log.index]?.note, JSON.stringify(log.metrics || [])]);
+        rows.push(["Тренування", s.name, s.date, s.status, s.items[log.index]?.name, log.quickResult ? "Найкращий результат" : log.warmup ? `Розминочний ${k + 1}` : k + 1, log.reps, log.weightText || log.weight, log.seconds, "", s.items[log.index]?.note, JSON.stringify(log.metrics || [])]);
       }
     }
   }

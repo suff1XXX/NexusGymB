@@ -14,9 +14,9 @@ export function recordSharingKeys(records, preference, legacyVisible) {
 export function profileSnapshots(sessions, recordPreference = null, manualSets = []) {
   const completed = sessions.filter(countsAsWorkout);
   const allProgress = progressSessions(completed, manualSets);
-  const logs = allProgress.flatMap((s) => s.logs.filter((l) => !l.warmup));
+  const logs = allProgress.flatMap((s) => s.logs.filter((l) => !l.warmup && !l.quickResult));
   return {
-    progress: { workouts: completed.length, sets: logs.length, volume: logs.reduce((sum, l) => sum + l.reps * l.weight, 0) },
+    progress: { workouts: completed.length, sets: logs.length, volume: logs.reduce((sum, l) => sum + (l.weightUnknown ? 0 : l.reps * l.weight), 0) },
     records: { items: sharedRecords(personalRecords(allProgress), recordPreference), ...(Number.isInteger(recordPreference?.revision)?{visibilityVersion:recordPreference.revision}:{}) },
     streak: { ...trainingStreak(completed), lastWorkoutDate: completed.map((s) => s.date).sort().at(-1) || '' },
   };

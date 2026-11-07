@@ -49,6 +49,8 @@ export function nextSequenceDay(program, sessions) {
 }
 export function newSession(program, day) {
   return {
+    executionMode: program.builderMode === 'simple' ? 'simple' : program.builderMode === 'cross' ? 'mixed' : 'advanced',
+    simpleCompleted: [],
     programId: program.id,
     dayId: day.weekday,
     name: day.name,
@@ -198,7 +200,7 @@ export function validProgram(p) {
   );
 }
 export function workingSetCount(session, index = session.index) {
-  return session.logs.filter((l) => l.index === index && !l.warmup).length;
+  return session.logs.filter((l) => l.index === index && !l.warmup && !l.quickResult).length;
 }
 export function completeSet(session, reps, weight, metrics = [], warmup = false) {
   const s = copy(session),
@@ -244,7 +246,7 @@ export function finishEarly(session) {
   if (session?.status !== 'active') throw Error('Немає активного тренування.');
   const s = copy(session);
   s.items.forEach((item, index) => {
-    if (workingSetCount(s, index) < item.sets && !s.skipped.includes(index)) s.skipped.push(index);
+    if (!s.simpleCompleted?.includes(index) && workingSetCount(s, index) < item.sets && !s.skipped.includes(index)) s.skipped.push(index);
   });
   return { ...s, status: 'completed', endedEarly: true, index: s.items.length,
     endedAt: Date.now(), timerEnd: 0, restEnd: 0 };

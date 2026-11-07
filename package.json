@@ -4,6 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test tools/*.test.mjs",
+    "test:catalog-browser": "node tools/catalog-json.browser.mjs",
+    "test:workout-browser": "node tools/workout-modes.browser.mjs",
     "test:browser": "node tools/browser-check.mjs",
     "test:rules": "firebase emulators:exec --only firestore --project demo-nexus-gymb \"node tools/rules-check.mjs\"",
     "start": "node tools/preview.mjs",
