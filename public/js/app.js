@@ -105,6 +105,7 @@ const S = {
   progressMetric: "weight",
   progressExercise: "",
   progressPeriod: "90",
+  progressSource: "all",
   historyFilters: { query: "", from: "", to: "", exercise: "" },
   timerSound: true,
   timerVibration: false,
@@ -1625,24 +1626,25 @@ function previousWorkout(item, session) {
   return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
 }
 function progressView() {
-  const analytics = progressSessions(S.sessions, S.manualSets);
+  const analytics = progressSessions(S.progressSource === 'manual' ? [] : S.sessions, S.progressSource === 'workouts' ? [] : S.manualSets);
   const items = new Map();
   analytics.filter((s) => s.status === "completed").forEach((s) => s.items.forEach((i, index) => {
-    if (s.logs.some((l) => l.index === index)) items.set(exerciseKey(i), i.name);
+    if (s.simpleCompleted?.includes(index) || s.logs.some((l) => l.index === index && !l.warmup)) items.set(exerciseKey(i), i.name);
   }));
   if (!items.has(S.progressExercise)) S.progressExercise = items.keys().next().value || "";
   const sinceDate = new Date();
   sinceDate.setDate(sinceDate.getDate() - +S.progressPeriod);
-  const points = progressSeries(S.progressMetric === 'frequency' ? S.sessions : analytics, { metric: S.progressMetric, key: S.progressExercise,
+  const points = progressSeries(S.progressMetric === 'frequency' ? (S.progressSource === 'manual' ? [] : S.sessions) : analytics, { metric: S.progressMetric, key: S.progressExercise,
     since: S.progressPeriod === "all" ? "" : localDate(sinceDate) });
-  const units = { weight: "кг", volume: "кг × повторення", frequency: "тренувань" };
+  const units = { weight: "кг", volume: "кг × повторення", frequency: "тренувань", performed: "виконань" };
   return `<section class="card progress-section"><h2>Прогрес ${privateProfileBadge()}</h2>
-    ${manualSetsPanel(items)}
-    <div class="formgrid"><label>Показник<select id="progress-metric">${[["weight", "Найбільша виконана вага"], ["volume", "Обсяг вправи"], ["frequency", "Тренування за місяць"]].map(([v, label]) => `<option value="${v}" ${S.progressMetric === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <p class="small muted">Переглядай результати завершених тренувань і підходів, записаних вручну.</p>
+    <div class="formgrid"><label>Джерело даних<select id="progress-source">${[['all','Усі результати'],['workouts','Із тренувань'],['manual','Ручні записи']].map(([v,label])=>`<option value="${v}" ${S.progressSource === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Показник<select id="progress-metric">${[["weight", "Найбільша виконана вага"], ["volume", "Обсяг вправи"], ["performed", "Виконання вправи"], ["frequency", "Тренування за місяць"]].map(([v, label]) => `<option value="${v}" ${S.progressMetric === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
     <label>Період<select id="progress-period">${[["30", "30 днів"], ["90", "90 днів"], ["365", "Рік"], ["all", "Увесь час"]].map(([v, label]) => `<option value="${v}" ${S.progressPeriod === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
     ${S.progressMetric !== "frequency" ? `<label>Вправа<select id="progress-exercise">${items.size ? [...items].sort((a, b) => a[1].localeCompare(b[1], "uk")).map(([key, name]) => `<option value="${esc(key)}" ${S.progressExercise === key ? "selected" : ""}>${esc(name)}</option>`).join("") : '<option value="">Ще немає результатів</option>'}</select></label>` : ""}</div>
-    <p class="small muted">${S.progressMetric === "volume" ? "Сума ваги × повторень у виконаних підходах за день." : S.progressMetric === "frequency" ? "Кількість завершених тренувань за місяць у вибраному періоді." : "Найбільша вага у виконаному підході за день."}</p>
+    <p class="small muted">${S.progressMetric === "performed" ? "Кількість виконань вправи за день: один раз за тренування або за ручний запис. Враховуються й позначки виконання без ваги." : S.progressMetric === "volume" ? "Сума ваги × повторень у виконаних підходах за день." : S.progressMetric === "frequency" ? "Кількість завершених тренувань за місяць у вибраному періоді. Ручні записи не враховуються." : "Найбільша вага у виконаному підході за день. Для тренувань без записаної ваги обери «Виконання вправи»."}</p>
     ${points.length ? progressChart(points, units[S.progressMetric]) : '<p class="muted">Немає результатів за вибраний період.</p>'}
+    ${manualSetsPanel(items)}
   </section>`;
 }
 function manualSetsPanel(items = new Map()) {
@@ -2147,6 +2149,29 @@ function alternativePanel(source, index) {
   const equipment = [...new Set(list.map(e=>e.equipment).filter(Boolean))];
   return `<details class="exercise-alternatives" ${index !== undefined ? 'open' : ''}><summary>Альтернативні вправи · ${list.length}</summary><p class="small muted">Та сама основна м’язова група. Спочатку — вправи з таким самим обладнанням. Перевір техніку й налаштуй навантаження для заміни.</p><label>Доступне обладнання<select data-alternative-equipment><option value="">Усе</option>${equipment.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('')}</select></label>${list.map(e=>`<div class="alternative-row" data-equipment="${esc(e.equipment || '')}"><span><strong>${esc(e.name)}</strong><small>${esc(e.equipment)}</small></span>${btn(index === undefined ? 'Переглянути' : 'Обрати',index === undefined ? 'detail' : 'replace-exercise',`data-id="${esc(e.id)}" ${index === undefined ? '' : `data-index="${index}"`}`,'ghost')}</div>`).join('') || '<p class="muted">У каталозі ще немає альтернатив для цієї групи.</p>'}</details>`;
 }
+function workoutReplacementPicker(source, index) {
+  const recommended = new Set(alternatives(S.exercises, source).map(e => e.id));
+  const list = S.exercises.filter(e => !e.archived && e.id !== source.exerciseId)
+    .sort((a,b) => Number(recommended.has(b.id)) - Number(recommended.has(a.id)) || a.name.localeCompare(b.name, 'uk'));
+  const equipment = [...new Set(list.map(e => e.equipment).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'uk'));
+  return `<div class="workout-replacements"><p class="small muted">Обери будь-яку вправу із загального каталогу або особистої бібліотеки. Рекомендовані альтернативи — на початку списку. Після заміни налаштуй вагу для нової вправи.</p><label>Пошук вправи<input type="search" data-replacement-filter="query" placeholder="Назва вправи" /></label><div class="formgrid"><label>Показати<select data-replacement-filter="scope"><option value="all">Усі вправи</option><option value="alternatives">Лише альтернативні</option></select></label><label>Обладнання<select data-replacement-filter="equipment"><option value="">Усе</option>${equipment.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('')}</select></label></div>${list.map(e=>`<div class="alternative-row" data-name="${esc(e.name.toLocaleLowerCase('uk'))}" data-equipment="${esc(e.equipment || '')}" data-recommended="${recommended.has(e.id)}"><span><strong>${esc(e.name)}</strong><small>${esc(e.primary)} · ${esc(e.equipment || 'Без обладнання')}${recommended.has(e.id) ? ' · Альтернатива' : ''}</small></span>${btn('Обрати','replace-exercise',`data-id="${esc(e.id)}" data-index="${index}"`,'ghost')}</div>`).join('')}<p class="muted replacement-empty" ${list.length ? 'hidden' : ''}>За цими фільтрами вправ немає.</p></div>`;
+}
+function filterWorkoutReplacements(target) {
+  const panel = target.closest('.workout-replacements');
+  if (!panel) return;
+  const query = panel.querySelector('[data-replacement-filter="query"]').value.trim().toLocaleLowerCase('uk');
+  const scope = panel.querySelector('[data-replacement-filter="scope"]').value;
+  const equipment = panel.querySelector('[data-replacement-filter="equipment"]').value;
+  let visible = 0;
+  panel.querySelectorAll('.alternative-row').forEach(row => {
+    row.hidden = !query.split(/\s+/).every(word=>row.dataset.name.includes(word)) || scope === 'alternatives' && row.dataset.recommended !== 'true' || !!equipment && row.dataset.equipment !== equipment;
+    if (!row.hidden) visible++;
+  });
+  panel.querySelector('.replacement-empty').hidden = visible > 0;
+}
+document.addEventListener('input', event => {
+  if (event.target.matches('[data-replacement-filter]')) filterWorkoutReplacements(event.target);
+});
 function addExercisePicker(id) {
   const e = S.exercises.find(e=>e.id===id && !e.archived);
   if (!e) throw Error('Вправу не знайдено.');
@@ -2868,7 +2893,7 @@ async function action(a, b) {
     }
     case 'workout-alternatives': {
       const s = ongoing(), index = +b.dataset.index;
-      openModal(`<h2>Заміна · ${esc(s.items[index].name)}</h2>${alternativePanel(s.items[index], index)}`); break;
+      openModal(`<h2>Заміна · ${esc(s.items[index].name)}</h2>${workoutReplacementPicker(s.items[index], index)}`); break;
     }
 
     case 'show-workout-summary': modal.close(); navigate('session',`?summary=${encodeURIComponent(id)}`); break;
@@ -4233,6 +4258,7 @@ document.addEventListener("change", async (event) => {
   if (target.matches('[data-alternative-equipment]')) {
     target.closest('.exercise-alternatives').querySelectorAll('.alternative-row').forEach(row=>{row.hidden=!!target.value && row.dataset.equipment!==target.value;}); return;
   }
+  if (target.matches('[data-replacement-filter]')) { filterWorkoutReplacements(target); return; }
   if (target.id === 'execution-mode') {
     const session = copy(ongoing());
     if (!session || !['simple','advanced','mixed'].includes(target.value)) return;
@@ -4278,9 +4304,10 @@ document.addEventListener("change", async (event) => {
     return;
   }
   if (target.closest("#program-form")) persistEditorDraft(true);
-  if (["progress-metric", "progress-period", "progress-exercise"].includes(target.id)) {
+  if (["progress-metric", "progress-period", "progress-exercise", "progress-source"].includes(target.id)) {
     if (target.id === "progress-metric") S.progressMetric = target.value;
     else if (target.id === "progress-period") S.progressPeriod = target.value;
+    else if (target.id === "progress-source") S.progressSource = target.value;
     else S.progressExercise = target.value;
     document.querySelector("#progress-view").innerHTML = progressView();
     return;

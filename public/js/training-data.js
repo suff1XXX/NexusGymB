@@ -62,6 +62,12 @@ export function progressSeries(sessions, { metric = "weight", key = "", since = 
       byDate.set(month, (byDate.get(month) || 0) + 1);
       continue;
     }
+    if (metric === "performed") {
+      const indexes = new Set([...(s.simpleCompleted || []), ...s.logs.filter(l => !l.warmup).map(l => l.index)]);
+      const value = Number([...indexes].some(index => s.items[index] && (!key || exerciseKey(s.items[index]) === key)));
+      if (value) byDate.set(s.date, (byDate.get(s.date) || 0) + value);
+      continue;
+    }
     const logs = s.logs.filter((l) => !l.warmup && !l.weightUnknown && (metric !== 'volume' || !l.quickResult) && s.items[l.index] && (!key || exerciseKey(s.items[l.index]) === key));
     if (!logs.length) continue;
     const value = metric === "volume" ? logs.reduce((sum, l) => sum + l.weight * l.reps, 0) : Math.max(...logs.map((l) => l.weight));
