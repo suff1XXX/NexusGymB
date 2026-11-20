@@ -8,6 +8,15 @@ export function ratingSummary(ratings) {
   const scores = ratings.map((r) => r.score).filter((s) => Number.isInteger(s) && s >= 0 && s <= 5);
   return { count: scores.length, average: scores.length ? scores.reduce((sum, s) => sum + s, 0) / scores.length : null };
 }
+export function commentRatings(comments) {
+  const latest=new Map();
+  for(const comment of comments) {
+    if(!comment.authorId||!Number.isInteger(comment.score)||comment.score<1||comment.score>5)continue;
+    const previous=latest.get(comment.authorId);
+    if(!previous||timestampMillis(comment.createdAt)>=timestampMillis(previous.createdAt))latest.set(comment.authorId,comment);
+  }
+  return [...latest].map(([id,comment])=>({id,score:comment.score}));
+}
 export function commentText(value) {
   const text = String(value ?? "").trim();
   if (!text || text.length > 2000) throw Error("Коментар має містити від 1 до 2000 символів.");

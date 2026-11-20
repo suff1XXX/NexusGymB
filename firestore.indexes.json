@@ -3,6 +3,14 @@
     "collectionGroup": "gymBros",
     "queryScope": "COLLECTION",
     "fields": [{ "fieldPath": "members", "arrayConfig": "CONTAINS" }, { "fieldPath": "status", "order": "ASCENDING" }]
+  }, {
+    "collectionGroup": "achievementScores",
+    "queryScope": "COLLECTION",
+    "fields": [{"fieldPath":"score","order":"DESCENDING"},{"fieldPath":"customId","order":"ASCENDING"}]
   }],
-  "fieldOverrides": []
+  "fieldOverrides": [{"collectionGroup":"comments","fieldPath":"authorId","indexes":[
+    {"order":"ASCENDING","queryScope":"COLLECTION"},
+    {"order":"DESCENDING","queryScope":"COLLECTION"},
+    {"order":"ASCENDING","queryScope":"COLLECTION_GROUP"}
+  ]}]
 }

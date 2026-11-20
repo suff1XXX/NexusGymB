@@ -11,11 +11,16 @@ import { progressSessions } from './manual-sets.js';
 import { createReadCache } from './read-cache.js';
 import { statsSignature, publishOnce } from './stats-publication.js';
 import { activityMillis } from './activity.js';
+import { achievementCatalog } from './achievement-catalog.js';
 let api,
-  registering = false;
+  registering = false, connecting;
 const authListeners = new Set();
 export async function connect() {
   if (api) return api;
+  if (!connecting) connecting = initialize().finally(() => { connecting = null; });
+  return connecting;
+}
+async function initialize() {
   const base = "https://www.gstatic.com/firebasejs/11.10.0/";
   const [A, B, C] = await Promise.all([
     import(base + "firebase-app.js"),
@@ -35,6 +40,7 @@ export async function connect() {
   const stores = new Map();
   const friendDirectories = new Set();
   const identityLookups = new Map();
+  let achievementBoard,achievementBoardPending;
   const store = (uid = auth.currentUser?.uid) => {
     if (!uid) throw Error("Спочатку увійди в акаунт.");
     if (!stores.has(uid)) stores.set(uid, createOfflineStore(localStorage, uid));
@@ -127,11 +133,49 @@ export async function connect() {
       requireOnline();
       await commit([{kind:'save',path:`users/${auth.currentUser.uid}/nutrition/generator`,data:value}]);
     },
+    async adminAchievementAwards(uid,action='list',medalId='',note='') {
+      requireOnline();
+      if(auth.currentUser?.uid!==OWNER_UID)throw Error('Немає доступу.');
+      const F=await import(base+'firebase-functions.js');
+      const result=await F.httpsCallable(F.getFunctions(app,'europe-west1'),'manageGymBAchievementAward')({uid,action,medalId,note});
+      return result.data;
+    },
+    async refreshAchievements() {
+      requireOnline();
+      const F=await import(base+'firebase-functions.js');
+      await F.httpsCallable(F.getFunctions(app,'europe-west1'),'refreshGymBAchievements')({});
+    },
+    watchAchievements(onChange,onError) {
+      return C.onSnapshot(C.doc(db,`users/${auth.currentUser.uid}/achievements/progress`),snapshot=>onChange(snapshot.exists()?snapshot.data():null),onError);
+    },
+    async saveAchievementDisplay(selectedIds,rankingEnabled) {
+      requireOnline();
+      if(!Array.isArray(selectedIds)||selectedIds.length>3||new Set(selectedIds).size!==selectedIds.length||selectedIds.some(id=>!achievementCatalog.some(medal=>medal.id===id))||typeof rankingEnabled!=='boolean')
+        throw Error('Обери до трьох зароблених медалей.');
+      const uid=auth.currentUser.uid;
+      await commit([{kind:'save',path:`users/${uid}/achievementSettings/display`,data:{selectedIds,rankingEnabled}},
+        ...(!rankingEnabled?[{kind:'remove',path:`achievementScores/${uid}`}]:[])]);
+      achievementBoard=null;
+    },
+    async achievementLeaderboard(force=false) {
+      requireOnline();
+      const uid=auth.currentUser.uid;
+      if(!force&&achievementBoard?.uid===uid&&Date.now()-achievementBoard.at<30000)return achievementBoard.rows;
+      if(achievementBoardPending?.uid===uid)return achievementBoardPending.promise;
+      const promise=(async()=>{
+        const query=C.query(C.collection(db,'achievementScores'),C.orderBy('score','desc'),C.orderBy('customId','asc'),C.limit(50));
+        const rows=(await timeout(C.getDocsFromServer(query))).docs.map(doc=>({...doc.data(),uid:doc.id}));
+        achievementBoard={uid,at:Date.now(),rows};return rows;
+      })();
+      achievementBoardPending={uid,promise};
+      try{return await promise;}finally{if(achievementBoardPending?.promise===promise)achievementBoardPending=null;}
+    },
     async nutritionData() {
       requireOnline();
-      const plans = await timeout(C.getDocsFromServer(C.collection(db,'nutritionPlans')));
-      const selection = await api.getLive(`users/${auth.currentUser.uid}/nutrition/selection`);
-      return { plans: plans.docs.map(d => ({...d.data(), id:d.id})), selection };
+      const [plans, selection] = await Promise.all([
+        api.list('nutritionPlans'), api.get(`users/${auth.currentUser.uid}/nutrition/selection`),
+      ]);
+      return { plans, selection };
     },
     async isOwner() {
       return auth.currentUser?.uid === OWNER_UID;
@@ -278,6 +322,20 @@ export async function connect() {
         friendDirectories.add(uid);
       }
     },
+    async changeName(value) {
+      requireOnline();
+      const name=String(value || '').trim(), uid=auth.currentUser.uid;
+      if (!name || name.length > 100) throw Error('Вкажи ім’я до 100 символів.');
+      await commit([
+        {kind:'patch',path:`users/${uid}`,data:{name}},
+        {kind:'patch',path:`publicProfiles/${uid}`,data:{name}},
+      ]);
+      await locked(`nexus-data-${uid}`,()=>{
+        const queue=store(uid), path=`users/${uid}`, profile=queue.cached(path);
+        if(profile)queue.cache(path,{...profile,name});
+      });
+      return name;
+    },
     async changeAvatar(photo) {
       requireOnline();
       const uid = auth.currentUser.uid;
@@ -320,10 +378,8 @@ export async function connect() {
       const q = C.query(C.collection(db, `publicProfiles/${uid}/comments`), C.orderBy('createdAt', 'desc'), C.limit(50));
       const comments = (await timeout(C.getDocsFromServer(q))).docs.map((d) => ({ ...d.data(), id: d.id }));
       const parents = [...new Set(comments.map((c) => c.parentId).filter((id) => id && !comments.some((c) => c.id === id)))];
-      for (const id of parents) {
-        const parent = await C.getDocFromServer(C.doc(db, `publicProfiles/${uid}/comments/${id}`));
-        if (parent.exists()) comments.push({ ...parent.data(), id: parent.id });
-      }
+      const missing = await Promise.all(parents.map(id => timeout(C.getDocFromServer(C.doc(db, `publicProfiles/${uid}/comments/${id}`)))));
+      for (const parent of missing) if (parent.exists()) comments.push({ ...parent.data(), id: parent.id });
       return Promise.all(comments.map(async (comment) => ({ ...comment,
         reactions: await api.commentReactions(`publicProfiles/${uid}/comments/${comment.id}`) })));
     },
@@ -333,7 +389,7 @@ export async function connect() {
       const promise=(async()=>{
         const card=await cachedRead(`profileCards/${uid}`,300000);
         const person=card||await api.getLive(`publicProfiles/${uid}`);
-        return {name:person?.name||'Спортсмен',photo:person?.photo||'',customId:person?.customId||null};
+        return {uid,name:person?.name||'Спортсмен',photo:person?.photo||'',customId:person?.customId||null};
       })();
       identityLookups.set(uid,{at:Date.now(),promise});
       try{return await promise;}catch(error){identityLookups.delete(uid);throw error;}
@@ -600,6 +656,7 @@ export async function connect() {
     if (!readers.has(uid)) readers.set(uid, createReadCache({
       store: store(uid), online: () => navigator.onLine, retryable,
       lock: fn => locked(`nexus-data-${uid}`, fn),
+      readLock: (path, fn) => locked(`nexus-read-${uid}-${path}`, fn),
       fetch: async path => {
         if (path.split('/').length % 2) {
           return (await timeout(C.getDocsFromServer(C.collection(db, path)))).docs.map(x => ({ ...x.data(), id: x.id }));

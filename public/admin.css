@@ -65,3 +65,7 @@ body[data-page="admin"] .admin-user-dialog { background:var(--panel); }
 .admin-online-list{max-height:300px;overflow:auto;}.admin-online-list>.row{padding:12px 0;border-bottom:1px solid var(--line);gap:10px;}.admin-online-list .avatar{width:32px;height:32px;flex-shrink:0;}.admin-online-list .grow{min-width:0;overflow-wrap:anywhere;}.admin-online-list small{display:block;margin-top:5px;}.admin-online-list .btn{padding:8px;font-size:11px;}
 #admin-statistics>.card{padding:15px 0 0;border:0;background:transparent;box-shadow:none;}
 @media(max-width:650px){.admin-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.admin-stat-grid>div{padding:15px;}.admin-stat-columns{grid-template-columns:1fr;}}
+ .admin-awards-list>div { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 0;border-bottom:1px solid var(--line); }
+ .admin-awards-list strong,.admin-awards-list small { display:block; }
+ .admin-awards-list small { color:var(--muted);margin-top:5px; }
+ #admin-award-form { margin:20px 0 28px; }

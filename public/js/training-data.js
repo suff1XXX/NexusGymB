@@ -4,12 +4,18 @@ export function exerciseKey(item) {
   return item.exerciseId || `name:${String(item.name || "").trim().toLocaleLowerCase("uk")}`;
 }
 
-export function previousResults(sessions, item, currentId) {
-  return sessions.filter((s) => s.status === "completed" && s.id !== currentId)
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.endedAt - a.endedAt)
-    .map((s) => ({ session: s, logs: (s.logs || []).filter((l) =>
-      s.items[l.index] && exerciseKey(s.items[l.index]) === exerciseKey(item)) }))
-    .find((result) => result.logs.length) || null;
+export function previousResults(sessions, item, currentId, includeLog = () => true) {
+  const key = exerciseKey(item), current = sessions.find(s => s.id === currentId);
+  let previous = null;
+  for (const session of sessions) {
+    if (session.status !== "completed" || session.id === currentId || current?.date && session.date > current.date) continue;
+    if (previous && (session.date < previous.session.date ||
+        session.date === previous.session.date && (session.endedAt || 0) <= (previous.session.endedAt || 0))) continue;
+    const indexes = new Set(session.items.flatMap((entry, index) => exerciseKey(entry) === key ? [index] : []));
+    const logs = (session.logs || []).filter(log => indexes.has(log.index) && includeLog(log));
+    if (logs.length) previous = { session, logs };
+  }
+  return previous;
 }
 
 export function repeatProgram(session) {

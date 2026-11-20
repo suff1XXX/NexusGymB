@@ -41,7 +41,7 @@ export function personalRecords(sessions) {
 }
 export function previousWorkingSet(sessions, item, currentId, position) {
   // Skip warmup-only sessions when looking for the most recent working results.
-  const previous = previousResults(sessions.map((s) => ({ ...s, logs: s.logs.filter((l) => !l.warmup) })), item, currentId);
+  const previous = previousResults(sessions, item, currentId, log => !log.warmup);
   if (!previous) return null;
   return previous.logs[Math.min(position, previous.logs.length - 1)] || null;
 }

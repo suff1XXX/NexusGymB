@@ -1,4 +1,21 @@
 const key = (uid, id) => `nexus:set-draft:${encodeURIComponent(uid)}:${encodeURIComponent(id)}`;
+const modeKey = uid => `nexus:execution-mode:${encodeURIComponent(uid)}`;
+const validMode = mode => ['simple', 'advanced', 'mixed'].includes(mode);
+export function rememberExecutionMode(storage, uid, mode) {
+  if (!uid || !validMode(mode)) return;
+  try { storage.setItem(modeKey(uid), mode); } catch {}
+}
+export function preferredExecutionMode(storage, uid, sessions = []) {
+  if (!uid) return null;
+  try {
+    const mode = storage.getItem(modeKey(uid));
+    if (validMode(mode)) return mode;
+  } catch {}
+  // Existing session data also restores the last mode on a new device.
+  const latest = sessions.filter(session => ['active', 'completed'].includes(session.status) && validMode(session.executionMode))
+    .reduce((last, session) => !last || (session.startedAt || session.endedAt || 0) > (last.startedAt || last.endedAt || 0) ? session : last, null);
+  return latest?.executionMode || null;
+}
 export function saveSetDraft(storage, uid, session, fields) {
   if (!uid || session?.status !== 'active') return;
   storage.setItem(key(uid, session.id), JSON.stringify({ index: session.index, logs: session.logs.length, fields }));
