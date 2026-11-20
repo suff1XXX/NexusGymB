@@ -253,6 +253,10 @@ function err(e) {
     "permission-denied": "Немає доступу до бази. Підтвердь пошту та перевір правила Firestore.",
     "resource-exhausted": "Вичерпано квоту бази даних. Доступ відновиться після поновлення квоти або зміни тарифу адміністратором.",
     "auth/network-request-failed": "Не вдалося підключитися до Firebase. Перевір мережу.",
+    "functions/internal": "Сервер досягнень недоступний. Адміністратору потрібно перевірити розгортання Firebase Functions.",
+    "functions/unavailable": "Сервер досягнень тимчасово недоступний. Спробуй пізніше.",
+    "functions/unauthenticated": "Увійди знову та підтвердь пошту, щоб завантажити досягнення.",
+    "functions/permission-denied": "Немає доступу до керування досягненнями.",
   };
   return codes[e.code] || e.message || "Не вдалося виконати дію. Спробуй ще раз.";
 }
@@ -685,7 +689,7 @@ async function loadAchievements({isCurrent,force=false}={}) {
         await db.refreshAchievements();
         if(!isCurrent())return;
         state.progress=await db.getLive(`users/${uid}/achievements/progress`);
-      } catch { state.error='Не вдалося синхронізувати медалі. Перевір з’єднання та спробуй ще раз.'; }
+      } catch(error) { state.error=err(error); }
     }
     if(!isCurrent())return;
     state.dirty=!!draft;
