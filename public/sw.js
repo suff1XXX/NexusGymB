@@ -1,4 +1,4 @@
-const CACHE = "nexus-shell-v55";
+const CACHE = "nexus-shell-v56";
 const base = new URL('./', self.location.href);
 const files = ['index.html','home.html','program.html','nutrition.html','nutrition.css','profile.html','settings.html','workout.html','workout.css','achievements.html','achievements.css','js/avatars.js','js/exercise-results.js','js/workout-additions.js','js/workout-additions-view.js','js/training-experience.js','js/training-experience-view.js','js/achievement-spark.js','js/achievement-catalog.js','js/achievement-view.js','editor.html','exercises.html','admin.html','admin.css','training-experience.css','styles.css','header.css','auth.css','favicon.svg','js/admin-stats.js','js/profile-appearance.js',
   'js/theme.js','js/app.js','js/model.js','js/workout-modes.js','js/firebase.js','js/config.js','js/import.js','js/social.js','js/rich-editor.bundle.js','js/reaction-interactions.js','js/nutrition.js','js/nutrition-generator.js','js/nutrition-view.js','js/performance.js','js/login-metadata.js','js/catalog.js','js/catalog-json.js','js/drafts.js',
