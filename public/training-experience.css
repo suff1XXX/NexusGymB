@@ -85,3 +85,11 @@
   .achievement-history-item>.badge { font-size:11px;padding:5px; }.achievement-history-item .small { font-size:12px; }
   .profile-layout-list>[data-layout-key] { padding:12px;gap:8px; }.profile-layout-list label { gap:8px;font-size:13px; }
 }
+.exercise-personal-note{margin:16px 0;padding:16px 18px;border:1px solid var(--line);border-left:3px solid #7288ef;border-radius:16px;background:color-mix(in srgb,#7288ef 6%,transparent)}
+.exercise-personal-note>div{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.exercise-personal-note p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0;line-height:1.6}
+.result-export{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.result-card-dialog{width:min(760px,calc(100vw - 24px))}
+.result-card-preview{display:grid;gap:16px;margin-top:20px}
+.result-card-preview canvas{display:block;width:100%;height:auto;border-radius:12px;box-shadow:0 8px 28px #0002}
+@media(max-width:600px){.exercise-personal-note{padding:12px}.result-card-dialog .actions{display:grid;grid-template-columns:1fr 1fr}.result-card-dialog .actions .btn{min-width:0}}

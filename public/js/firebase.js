@@ -101,7 +101,7 @@ async function initialize() {
   auth.languageCode = "uk";
   const actionSettings = () => ({ url: new URL("../index.html", import.meta.url).href });
   const notice = (recipient, type, targetId, profileId) => ({ kind: 'save',
-    path: `users/${recipient}/notifications/${type}_${targetId}`, data: {
+    path: `users/${recipient}/notifications/event_${crypto.randomUUID()}`, data: {
       type, actorId: auth.currentUser.uid, profileId, targetId, createdAt: C.serverTimestamp(), read: false,
     } });
   const readSpark=async path=>(await timeout(C.getDocFromServer(C.doc(db,path)))).data()||null;
@@ -324,10 +324,10 @@ async function initialize() {
       return items;
     },
     watchAchievementEvents(onChange,onError) {
-      return C.onSnapshot(C.query(C.collection(db,`users/${auth.currentUser.uid}/achievementEvents`),C.orderBy('earnedAt','desc'),C.limit(30)),snapshot=>onChange(snapshot.docs.map(doc=>({...doc.data(),id:doc.id}))),onError);
+      return C.onSnapshot(C.query(C.collection(db,`users/${auth.currentUser.uid}/achievementEvents`),C.orderBy('earnedAt','desc')),snapshot=>onChange(snapshot.docs.map(doc=>({...doc.data(),id:doc.id}))),onError);
     },
     async readAchievementEvents(ids) {
-      requireOnline();await commit(ids.slice(0,30).map(id=>({kind:'patch',path:`users/${auth.currentUser.uid}/achievementEvents/${id}`,data:{read:true}})));
+      requireOnline();for(let start=0;start<ids.length;start+=100)await commit(ids.slice(start,start+100).map(id=>({kind:'patch',path:`users/${auth.currentUser.uid}/achievementEvents/${id}`,data:{read:true}})));
     },
     async adminAchievementAwards(uid,action='list',medalId='',note='') {
       requireOnline();
@@ -835,9 +835,16 @@ async function initialize() {
       return C.onSnapshot(C.query(C.collection(db, `users/${uid}/notifications`), C.orderBy('createdAt', 'desc'), C.limit(100)),
         (snapshot) => onChange(snapshot.docs.map((d) => ({ ...d.data(), id: d.id }))), onError);
     },
+    async olderNotifications(lastId) {
+      requireOnline();
+      const path=`users/${auth.currentUser.uid}/notifications`,last=await C.getDocFromServer(C.doc(db,`${path}/${lastId}`));
+      if(!last.exists())throw Error('Онови список сповіщень.');
+      const snapshot=await C.getDocsFromServer(C.query(C.collection(db,path),C.orderBy('createdAt','desc'),C.startAfter(last),C.limit(50)));
+      return snapshot.docs.map(doc=>({...doc.data(),id:doc.id}));
+    },
     async readNotifications(ids) {
       requireOnline();
-      await commit(ids.slice(0, 100).map((id) => ({ kind: 'patch', path: `users/${auth.currentUser.uid}/notifications/${id}`, data: { read: true } })));
+      for(let start=0;start<ids.length;start+=100)await commit(ids.slice(start,start+100).map(id=>({kind:'patch',path:`users/${auth.currentUser.uid}/notifications/${id}`,data:{read:true}})));
     },
     async save(path, data) {
       await mutate([{ kind: "save", path, data }]);

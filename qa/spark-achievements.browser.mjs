@@ -19,7 +19,7 @@ export async function checkSparkBrowser(owner) {
   await context.addInitScript(()=>{localStorage.setItem('qa-auth',localStorage.getItem('qa-auth')||'alice');localStorage.setItem('nexus:theme','Темна');});
   await context.route('**/firebase-auth.js',route=>route.fulfill({contentType:'text/javascript',body:`
     const uid=localStorage.getItem('qa-auth');
-    const user={uid,emailVerified:true,email:uid+'@example.test',displayName:uid,photoURL:'',metadata:{creationTime:new Date(1).toISOString(),lastSignInTime:new Date(1).toISOString()}};
+    const user=uid==='signed-out'?null:{uid,emailVerified:true,email:uid+'@example.test',displayName:uid,photoURL:'',metadata:{creationTime:new Date(1).toISOString(),lastSignInTime:new Date(1).toISOString()}};
     const auth={currentUser:user};
     export const getAuth=()=>auth,browserLocalPersistence={},setPersistence=async()=>{},onAuthStateChanged=(_,fn)=>{queueMicrotask(()=>fn(user));return ()=>{};};
   `}));
@@ -151,6 +151,46 @@ export async function checkSparkBrowser(owner) {
     await page.waitForFunction(()=>document.querySelectorAll('[data-action="restore-today-exercise"]').length===0);
     await page.waitForFunction(()=>document.querySelector('.workout-sets tbody tr')?.textContent.includes('20 кг'));
     await page.screenshot({path:'.sites-runtime/today-only-replacement-mobile.png',fullPage:true});
+    await page.locator('[data-action="exercise-note"][data-index="0"]').click();
+    await page.locator('#exercise-note-form [name="note"]').fill('Сидіння 4 · вузький хват\nКонтрольований рух <b>без HTML</b>');
+    await page.locator('#exercise-note-form button[type="submit"]').click();
+    await page.waitForFunction(()=>!document.querySelector('#modal')?.open);
+    await page.reload();
+    await page.locator('.exercise-personal-note').filter({hasText:'Сидіння 4'}).waitFor();
+    assert.equal(await page.locator('.exercise-personal-note b').count(),0);
+    await page.locator('#execution-mode').selectOption('simple');
+    await page.locator('.checklist-item .exercise-personal-note').filter({hasText:'Сидіння 4'}).waitFor();
+    await page.locator('.exercise-personal-note').first().screenshot({path:'.sites-runtime/exercise-note-mobile.png'});
+    await page.locator('.checklist-item .workout-more>summary').first().click();
+    await page.locator('.checklist-item [data-action="detail"]').first().click();
+    await page.locator('#modal .exercise-personal-note').filter({hasText:'Сидіння 4'}).waitFor();
+    await page.locator('#modal [data-action="exercise-note"]').click();
+    assert.match(await page.locator('#exercise-note-form [name="note"]').inputValue(),/Сидіння 4/);
+    await page.locator('#exercise-note-form [name="note"]').fill('');
+    await page.locator('#exercise-note-form button[type="submit"]').click();
+    await page.waitForFunction(()=>!document.querySelector('#modal')?.open);
+    assert.equal(await page.locator('.exercise-personal-note').filter({hasText:'Сидіння 4'}).count(),0);
+    await page.goto(origin+'/workout.html?summary=experience-new');
+    await page.locator('[data-action="result-card"]').click();
+    await page.locator('.result-card-preview canvas').waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    for(const format of ['png','pdf']) {
+      const waiting=page.waitForEvent('download');
+      await page.locator(`[data-action="download-result"][data-format="${format}"]`).click();
+      const download=await waiting;await download.saveAs(`.sites-runtime/result-card.${format}`);
+      assert.equal(await download.failure(),null);
+    }
+    await page.screenshot({path:'.sites-runtime/result-card-preview-mobile.png'});
+    const longDownload=page.waitForEvent('download');
+    const count=await page.evaluate(async()=>{
+      const {renderResultCard,resultPDF,downloadResult}=await import('./js/result-card.js');
+      const session={id:'long',name:'Силове тренування з довгими назвами вправ',date:'2026-11-22',status:'completed',startedAt:0,endedAt:3600000,
+        items:Array.from({length:32},(_,i)=>({exerciseId:'exercise-'+i,name:`Вправа ${i+1}: жим у тренажері з регульованим нахилом спинки`,sets:2})),
+        logs:Array.from({length:64},(_,i)=>({index:Math.floor(i/2),weight:40+i,reps:8}))};
+      const pages=await renderResultCard(session);downloadResult(resultPDF(pages),'long-result.pdf');return pages.length;
+    });
+    assert.ok(count>1);await (await longDownload).saveAs('.sites-runtime/result-card-long.pdf');
+
     await page.goto(origin+'/home.html');
     await page.locator('.meeting-polls [data-action="new-meeting-poll"]').click();
     await page.locator('#meeting-poll-form [name="title"]').fill('Узгоджуємо тренування');
@@ -178,6 +218,56 @@ export async function checkSparkBrowser(owner) {
     await page.locator('[data-action="respond-training-invite"][data-status="accepted"]').click();
     await page.waitForFunction(()=>document.querySelector('#modal')?.textContent.includes('Прийнято'));
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.evaluate(()=>localStorage.setItem('qa-auth','alice'));
+    await page.goto(origin+'/home.html');
+    await page.locator('.home-extras .weekly-goal-card').waitFor();
+    assert.ok(await page.locator('.hero').evaluate(e=>e.getBoundingClientRect().top)<await page.locator('.weekly-goal-card').evaluate(e=>e.getBoundingClientRect().top));
+    for(const width of [1280,760,390,320]){
+      await page.setViewportSize({width,height:900});await page.evaluate(()=>scrollTo(0,0));
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`Header at ${width}`);
+      await page.locator('#site-header').screenshot({path:`.sites-runtime/header-${width}.png`});
+    }
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('[data-action="open-notices"]').click();
+    await page.locator('[data-action="older-notices"]').click();
+    await page.locator('.notice-item[data-id="old_0"]').waitFor();
+    const countBefore=await page.locator('.notice-item').count();assert.ok(countBefore>135);
+    if(await page.locator('[data-action="read-all-notices"]').count())await page.locator('[data-action="read-all-notices"]').click();
+    await page.waitForFunction(()=>!document.querySelector('.notice-item.unread'));
+    assert.equal(await page.locator('.notice-item').count(),countBefore);
+    await page.locator('#modal').screenshot({path:'.sites-runtime/notification-history-mobile.png'});
+    await page.reload();await page.locator('[data-action="open-notices"]').click();
+    await page.locator('[data-action="older-notices"]').click();
+    await page.locator('.notice-item[data-id="old_0"]').waitFor();
+    assert.equal(await page.locator('.notice-item').count(),countBefore);
+    assert.equal(await page.locator('.notice-item.unread').count(),0);
+    await page.evaluate(()=>localStorage.setItem('qa-auth','signed-out'));
+    await page.goto(origin+'/index.html');await page.locator('#auth-form').waitFor();await page.waitForFunction(()=>!document.querySelector('#auth-form button[type="submit"]').disabled);
+    await page.setViewportSize({width:1280,height:900});await page.emulateMedia({reducedMotion:'no-preference'});
+    await page.locator('#auth-form [name="email"]').fill('athlete@example.test');
+    await page.locator('#auth-form [name="password"]').fill('Private-test-123');
+    await page.locator('[data-action="toggle-auth-password"]').click();
+    assert.equal(await page.locator('#auth-form [name="password"]').getAttribute('type'),'text');
+    await page.locator('[data-action="toggle-auth-password"]').click();
+    assert.equal(await page.locator('#auth-form [name="password"]').getAttribute('type'),'password');
+    assert.equal(await page.locator('#auth-form [name="password"]').inputValue(),'Private-test-123');
+    assert.equal(await page.locator('.auth-atmosphere>i').first().evaluate(e=>getComputedStyle(e).animationName),'auth-drift');
+    await page.screenshot({path:'.sites-runtime/login-desktop.png',fullPage:true});
+    await page.locator('[data-action="auth-mode"][data-id="register"]').click();
+    assert.equal(await page.locator('#auth-form [name="email"]').inputValue(),'athlete@example.test');
+    await page.locator('#auth-form [name="name"]').fill('Спортсмен');
+    await page.locator('#auth-form [name="password"]').fill('Private-test-123');
+    await page.locator('#auth-form [name="confirm"]').fill('Other-test-123');
+    await page.locator('#auth-form button[type="submit"]').click();
+    await page.locator('.form-error').filter({hasText:'Паролі не збігаються'}).waitFor();
+    await page.screenshot({path:'.sites-runtime/register-desktop.png',fullPage:true});
+    for(const width of [390,320]){
+      await page.setViewportSize({width,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+      await page.screenshot({path:`.sites-runtime/register-${width}.png`,fullPage:true});
+    }
+    await page.evaluate(()=>applyTheme('Світла',false));await page.screenshot({path:'.sites-runtime/register-light-mobile.png',fullPage:true});
+    await page.emulateMedia({reducedMotion:'reduce'});
+    assert.equal(await page.locator('.auth-atmosphere>i').first().evaluate(e=>getComputedStyle(e).animationName),'none');
     assert.deepEqual(functions,[]);assert.deepEqual(errors,[]);
     console.log('Spark browser passed: achievements, weekly goals, workout comparison, reflections, GymBro challenge invitation and acceptance, profile layout persistence and visitor privacy.');
   } catch(error) {await page.screenshot({path:'.sites-runtime/spark-browser-failure.png'});throw error;}

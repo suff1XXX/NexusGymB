@@ -34,6 +34,18 @@ try {
     await C.setDoc(C.doc(admin,'publicProfiles/bob/comments/c'),{authorId:'alice',text:'Коментар',createdAt:1});
   });
   const alice=await client('alice'),bob=await client('bob'),ceo=await client(owner);
+  const notePath='users/alice/exerciseNotes/press';
+  const note={exerciseKey:'press',note:'Сидіння 4, вузький хват',updatedAt:Date.now()};
+  await C.setDoc(C.doc(alice.db,notePath),note);
+  assert.equal((await get(alice.db,notePath)).note,note.note);
+  await assertFails(C.getDoc(C.doc(bob.db,notePath)));
+  await assertFails(C.getDoc(C.doc(ceo.db,notePath)));
+  await assertFails(C.getDocs(C.collection(bob.db,'users/alice/exerciseNotes')));
+  await assertFails(C.setDoc(C.doc(bob.db,notePath),note));
+  await assertFails(C.deleteDoc(C.doc(ceo.db,notePath)));
+  await assertFails(C.setDoc(C.doc(alice.db,notePath),{...note,note:'x'.repeat(2001)}));
+  await assertFails(C.setDoc(C.doc(alice.db,notePath),{...note,public:true}));
+  await C.deleteDoc(C.doc(alice.db,notePath));
   await env.withSecurityRulesDisabled(async context=>C.setDoc(C.doc(context.firestore(),'users/new-user'),{name:'Новий користувач',email:'new-user@example.test',customId:4,createdAt:1}));
   assert.equal((await ceo.api.adminAchievementAwards('new-user','grant','ceo-praise')).score,300);
   const newcomer=await client('new-user');
@@ -152,6 +164,18 @@ try {
   const declinedPoll=await bob.api.createMeetingPoll('alice',{title:'Інший час',options:pollOptions.slice(0,2)});
   await alice.api.voteMeetingPoll(declinedPoll,[]);await bob.api.voteMeetingPoll(declinedPoll,[]);
   await assert.rejects(bob.api.closeMeetingPoll(declinedPoll,0));await bob.api.cancelMeetingPoll(declinedPoll);
+  await env.withSecurityRulesDisabled(async context=>{
+    const db=context.firestore(),batch=C.writeBatch(db);
+    for(let i=0;i<135;i++)batch.set(C.doc(db,`users/alice/notifications/old_${i}`),{type:'comment',actorId:'bob',profileId:'alice',targetId:'removed-comment',read:false,createdAt:C.Timestamp.fromMillis(1000+i)});
+    await batch.commit();
+  });
+  await assertFails(C.updateDoc(C.doc(bob.db,'users/alice/notifications/old_0'),{read:true}));
+  await assertFails(C.updateDoc(C.doc(alice.db,'users/alice/notifications/old_0'),{createdAt:C.serverTimestamp()}));
+  await assertFails(C.setDoc(C.doc(bob.db,'users/alice/notifications/event_12345678-1234-1234-1234-123456789012'),{type:'comment',actorId:'bob',profileId:'alice',targetId:'no-proof',read:false,createdAt:C.serverTimestamp()}));
+  const older=await alice.api.olderNotifications('old_35');assert.equal(older.length,35);assert.equal(older.at(-1).id,'old_0');
+  await alice.api.readNotifications(Array.from({length:135},(_,i)=>`old_${i}`));
+  assert.equal((await get(alice.db,'users/alice/notifications/old_134')).read,true);
+  assert.equal((await get(alice.db,'users/alice/notifications/old_0')).read,true);
   if(process.env.QA_BROWSER_PATH) {
     await env.withSecurityRulesDisabled(async context=>{
       const db=context.firestore();
@@ -166,5 +190,14 @@ try {
     });
     await (await import('./spark-achievements.browser.mjs')).checkSparkBrowser(owner);
   }
+  await env.withSecurityRulesDisabled(async context=>{
+    const db=context.firestore();await C.setDoc(C.doc(db,'publicProfiles/dave'),{name:'Dave',photo:'',customId:987654,joinedAt:1});
+  });
+  const dave=await client('dave');
+  await dave.api.requestGymBro('alice');await alice.api.acceptGymBro('dave_alice');await dave.api.removeGymBro('dave_alice');
+  await dave.api.requestGymBro('alice');await alice.api.acceptGymBro('dave_alice');
+  const retained=(await C.getDocs(C.collection(alice.db,'users/alice/notifications'))).docs.filter(doc=>doc.data().actorId==='dave');
+  assert.equal(retained.length,2);assert.notEqual(retained[0].id,retained[1].id);
+  await assertFails(C.updateDoc(C.doc(dave.db,`users/alice/notifications/${retained[0].id}`),{createdAt:C.serverTimestamp()}));
   console.log('Spark rules passed: achievements, fixed scoring, private goals and reflections, layout ownership, immutable medal history, challenge acceptance and completion, and all-medal migration.');
 } finally {await env.cleanup();}
