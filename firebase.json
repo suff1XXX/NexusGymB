@@ -1,5 +1,4 @@
 {
-  "functions": [{"source":"functions","codebase":"achievements","predeploy":["npm --prefix \"$PROJECT_DIR\" run build:achievements"]}],
   "firestore": {
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"

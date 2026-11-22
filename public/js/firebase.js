@@ -11,7 +11,8 @@ import { progressSessions } from './manual-sets.js';
 import { createReadCache } from './read-cache.js';
 import { statsSignature, publishOnce } from './stats-publication.js';
 import { activityMillis } from './activity.js';
-import { achievementCatalog } from './achievement-catalog.js';
+import { achievementCatalog,achievementFacts } from './achievement-catalog.js';
+import {sparkProgress,sparkDisplay,sameSparkProgress} from './achievement-spark.js';
 let api,
   registering = false, connecting;
 const authListeners = new Set();
@@ -40,7 +41,11 @@ async function initialize() {
   const stores = new Map();
   const friendDirectories = new Set();
   const identityLookups = new Map();
-  let achievementBoard,achievementBoardPending;
+  let achievementBoard,achievementBoardPending,sparkRefreshPending,sparkRefreshTimer;
+  const scheduleSparkRefresh=()=>{
+    clearTimeout(sparkRefreshTimer);
+    sparkRefreshTimer=setTimeout(()=>{if(auth.currentUser?.emailVerified&&navigator.onLine)api.refreshAchievements().catch(error=>console.warn('Achievements:',error.code||error.message));},2500);
+  };
   const store = (uid = auth.currentUser?.uid) => {
     if (!uid) throw Error("Спочатку увійди в акаунт.");
     if (!stores.has(uid)) stores.set(uid, createOfflineStore(localStorage, uid));
@@ -67,6 +72,7 @@ async function initialize() {
       else batch.set(ref, op.data);
     }
     await timeout(batch.commit());
+    if(operations.some(op=>/^users\/[^/]+\/(programs|exercises)\//.test(op.path)||/^users\/[^/]+\/sessions\//.test(op.path)&&(op.kind==='remove'||op.data?.status==='completed')||/^publicProfiles\/[^/]+$/.test(op.path)||/^gymBros\//.test(op.path)||/\/comments\/[^/]+$/.test(op.path)))scheduleSparkRefresh();
     if (auth.currentUser) await locked(`nexus-data-${auth.currentUser.uid}`, () => store().invalidate([
       ...operations.map(op => op.path),
       ...(profileWrite ? [`profileCards/${auth.currentUser.uid}`] : []),
@@ -96,6 +102,75 @@ async function initialize() {
     path: `users/${recipient}/notifications/${type}_${targetId}`, data: {
       type, actorId: auth.currentUser.uid, profileId, targetId, createdAt: C.serverTimestamp(), read: false,
     } });
+  const readSpark=async path=>(await timeout(C.getDocFromServer(C.doc(db,path)))).data()||null;
+  const listSpark=async path=>(await timeout(C.getDocsFromServer(C.collection(db,path)))).docs.map(doc=>({...doc.data(),id:doc.id}));
+  async function recordSparkDay(uid) {
+    const ref=C.doc(db,`users/${uid}/achievementActivity/current`);
+    return C.runTransaction(db,async tx=>{
+      const previous=(await tx.get(ref)).data(),day=Math.floor(Date.now()/86400000);
+      if(previous?.lastDay>=day)return false;
+      tx.set(ref,{count:Math.min(30,(previous?.count||0)+1),lastDay:day,updatedAt:C.serverTimestamp()});return true;
+    });
+  }
+  async function refreshSpark(uid) {
+    await recordSparkDay(uid);
+    const [sessions,programs,exercises,friends,profile,invites,activity,comments]=await Promise.all([
+      listSpark(`users/${uid}/sessions`),listSpark(`users/${uid}/programs`),listSpark(`users/${uid}/exercises`),api.gymBros(),readSpark(`publicProfiles/${uid}`),api.trainingInvites(),readSpark(`users/${uid}/achievementActivity/current`),
+      C.getDocsFromServer(C.query(C.collectionGroup(db,'comments'),C.where('authorId','==',uid),C.limit(10))),
+    ]);
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    const own=new Map(sessions.map(session=>[session.id,session]));let sharedWorkouts=0;
+    for(const invite of invites.filter(value=>value.status==='accepted')) {
+      const session=own.get(`invite_${invite.id}`),partner=invite.from===uid?invite.to:invite.from;
+      if(session?.invitationId!==invite.id||session.gymBroId!==partner||session.date!==invite.date||!achievementFacts({sessions:[session],today}).workouts)continue;
+      const ref=C.doc(db,`trainingInvites/${invite.id}/completions/${uid}`);
+      const previous=(await C.getDocFromServer(ref)).data();
+      if(!previous)await C.setDoc(ref,{completed:true,updatedAt:C.serverTimestamp()});
+      try {
+        const other=await C.getDocFromServer(C.doc(db,`trainingInvites/${invite.id}/completions/${partner}`));
+        if(other.exists()&&other.data().completed===true)sharedWorkouts++;
+      } catch(error) {if(error.code!=='permission-denied')throw error;}
+    }
+    const facts=achievementFacts({uid,today,sessions,programs,exercises,friends,profile:profile||{},sharedWorkouts,activeDays:activity?.count||0,
+      comments:comments.docs.filter(doc=>/^(publicProfiles|exercises|programTemplates)\/[^/]+\/comments\/[^/]+$/.test(doc.ref.path)).map(doc=>doc.data())});
+    if(auth.currentUser?.uid!==uid)throw Error('Обліковий запис змінився.');
+    return publishSpark(uid,facts);
+  }
+  async function publishSpark(uid,facts,award=null,display=null) {
+    const progressRef=C.doc(db,`users/${uid}/achievements/progress`),grantsRef=C.doc(db,`users/${uid}/achievementGrants/current`),settingsRef=C.doc(db,`users/${uid}/achievementSettings/display`);
+    const auditRef=award&&award.action!=='list'?C.doc(C.collection(db,`users/${uid}/achievementAwardAudit`)):null;
+    const result=await C.runTransaction(db,async tx=>{
+      const showcaseRef=C.doc(db,`publicProfiles/${uid}/achievements/showcase`),scoreRef=C.doc(db,`achievementScores/${uid}`);
+      const [progress,grants,settings,profile,account,activity,showcase,score]=await Promise.all([tx.get(progressRef),tx.get(grantsRef),tx.get(settingsRef),tx.get(C.doc(db,`publicProfiles/${uid}`)),tx.get(C.doc(db,`users/${uid}`)),tx.get(C.doc(db,`users/${uid}/achievementActivity/current`)),tx.get(showcaseRef),tx.get(scoreRef)]);
+      if(!account.exists()||!profile.exists())throw Error('Користувача не знайдено.');
+      let manualIds=grants.data()?.ids||[];
+      if(award?.action==='list')return {earnedIds:progress.data()?.earnedIds||[],manualIds,score:progress.data()?.score||0};
+      if(award) {
+        const requested=award.action==='grant'?[...manualIds,award.medalId]:manualIds.filter(id=>id!==award.medalId);
+        const ids=achievementCatalog.filter(medal=>requested.includes(medal.id)).map(medal=>medal.id);
+        if(JSON.stringify(ids)!==JSON.stringify(manualIds)) {
+          manualIds=ids;
+          tx.set(grantsRef,{ids,updatedAt:C.serverTimestamp(),updatedBy:auth.currentUser.uid});
+          tx.set(auditRef,{medalId:award.medalId,action:award.action,note:award.note.trim(),actorId:auth.currentUser.uid,createdAt:C.serverTimestamp()});
+        }
+      }
+      const next=sparkProgress({...(facts||progress.data()?.facts||{}),activeDays:activity.data()?.count||0},manualIds);
+      const savedDisplay=settings.data(),nextDisplay=sparkDisplay(display||savedDisplay,next.earnedIds);
+      if(display&&JSON.stringify(nextDisplay.selectedIds)!==JSON.stringify(display.selectedIds))throw Error('Цю медаль ще не отримано. Онови прогрес.');
+      const progressChanged=!sameSparkProgress(progress.data(),next);
+      if(progressChanged)tx.set(progressRef,{...next,updatedAt:C.serverTimestamp()});
+      const displayChanged=display||savedDisplay&&JSON.stringify(nextDisplay)!==JSON.stringify(savedDisplay);
+      if(displayChanged)tx.set(settingsRef,nextDisplay);
+      const publicProfile=profile.data();
+      if(JSON.stringify(showcase.data()?.selectedIds)!==JSON.stringify(nextDisplay.selectedIds))tx.set(showcaseRef,{selectedIds:nextDisplay.selectedIds,updatedAt:C.serverTimestamp()});
+      const scoreData={uid,name:publicProfile.name,photo:publicProfile.photo||'',customId:publicProfile.customId,score:next.score,medalCount:next.earnedIds.length};
+      if(nextDisplay.rankingEnabled&&Number.isInteger(publicProfile.customId)) {
+        if(Object.entries(scoreData).some(([key,value])=>score.data()?.[key]!==value))tx.set(scoreRef,{...scoreData,updatedAt:C.serverTimestamp()});
+      } else if(score.exists())tx.delete(scoreRef);
+      return next;
+    });
+    achievementBoard=null;return result;
+  }
   api = {
     timestamp: () => C.serverTimestamp(),
     auth,
@@ -136,26 +211,25 @@ async function initialize() {
     async adminAchievementAwards(uid,action='list',medalId='',note='') {
       requireOnline();
       if(auth.currentUser?.uid!==OWNER_UID)throw Error('Немає доступу.');
-      const F=await import(base+'firebase-functions.js');
-      const result=await F.httpsCallable(F.getFunctions(app,'europe-west1'),'manageGymBAchievementAward')({uid,action,medalId,note});
-      return result.data;
+      if(typeof uid!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(uid)||!['list','grant','revoke'].includes(action))throw Error('Перевір користувача та дію.');
+      if(action!=='list'&&(!achievementCatalog.some(m=>m.id===medalId)||typeof note!=='string'||note.length>200))throw Error('Перевір медаль та примітку.');
+      return publishSpark(uid,null,{action,medalId,note});
     },
     async refreshAchievements() {
       requireOnline();
-      const F=await import(base+'firebase-functions.js');
-      await F.httpsCallable(F.getFunctions(app,'europe-west1'),'refreshGymBAchievements')({});
+      const uid=auth.currentUser?.uid;
+      if(!uid||!auth.currentUser.emailVerified)throw Error('Увійди та підтвердь пошту.');
+      if(sparkRefreshPending?.uid===uid)return sparkRefreshPending.promise;
+      const promise=refreshSpark(uid);sparkRefreshPending={uid,promise};
+      try{return await promise;}finally{if(sparkRefreshPending?.promise===promise)sparkRefreshPending=null;}
     },
     watchAchievements(onChange,onError) {
       return C.onSnapshot(C.doc(db,`users/${auth.currentUser.uid}/achievements/progress`),snapshot=>onChange(snapshot.exists()?snapshot.data():null),onError);
     },
     async saveAchievementDisplay(selectedIds,rankingEnabled) {
       requireOnline();
-      if(!Array.isArray(selectedIds)||selectedIds.length>3||new Set(selectedIds).size!==selectedIds.length||selectedIds.some(id=>!achievementCatalog.some(medal=>medal.id===id))||typeof rankingEnabled!=='boolean')
-        throw Error('Обери до трьох зароблених медалей.');
-      const uid=auth.currentUser.uid;
-      await commit([{kind:'save',path:`users/${uid}/achievementSettings/display`,data:{selectedIds,rankingEnabled}},
-        ...(!rankingEnabled?[{kind:'remove',path:`achievementScores/${uid}`}]:[])]);
-      achievementBoard=null;
+      if(!Array.isArray(selectedIds)||selectedIds.length>3||new Set(selectedIds).size!==selectedIds.length||selectedIds.some(id=>!achievementCatalog.some(medal=>medal.id===id))||typeof rankingEnabled!=='boolean')throw Error('Обери до трьох зароблених медалей.');
+      return publishSpark(auth.currentUser.uid,null,null,{selectedIds,rankingEnabled});
     },
     async achievementLeaderboard(force=false) {
       requireOnline();
@@ -194,6 +268,7 @@ async function initialize() {
           { kind: 'patch', path: `users/${uid}`, data: { lastActiveAt: C.serverTimestamp() } },
           { kind: 'save', path: `publicProfiles/${uid}/stats/lastActive`, data: { at: C.serverTimestamp() } },
         ]);
+        if(await recordSparkDay(uid))scheduleSparkRefresh();
         try { localStorage.setItem(key, String(Date.now())); } catch {}
         return true;
       });

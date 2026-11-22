@@ -684,7 +684,7 @@ async function loadAchievements({isCurrent,force=false}={}) {
     else state.error='Не вдалося завантажити налаштування вітрини.';
     if(results[2].status==='fulfilled')state.leaders=results[2].value;
     else state.leaderError='Не вдалося завантажити рейтинг. Спробуй ще раз.';
-    if(force||!state.progress) {
+    {
       try {
         await db.refreshAchievements();
         if(!isCurrent())return;
@@ -2410,7 +2410,7 @@ function adminSection(key,title,description,icon,count,content) {
 }
 document.addEventListener('toggle',event=>{
   const section=event.target;
-  if(!section.matches?.('.admin-section'))return;
+  if(!section.isConnected||!section.matches?.('.admin-section'))return;
   if(section.open)adminExpanded.add(section.dataset.adminSection);else adminExpanded.delete(section.dataset.adminSection);
 },true);
 function admin() {
