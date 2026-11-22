@@ -10,7 +10,9 @@ export function workoutSummary(session, sessions = []) {
     return !before || r.weight > before.weight || r.weight === before.weight && r.reps > before.reps;
   }).map((r)=>({...r,first:!baseline.has(r.key)}));
   return {
-    minutes: Math.max(0,Math.round((session.endedAt-session.startedAt)/60000)),
+    minutes: Number.isFinite(session.endedAt-session.startedAt)?Math.max(0,Math.round((session.endedAt-session.startedAt)/60000)):0,
+    minutesKnown:Number.isFinite(session.endedAt-session.startedAt),
+    volumeKnown:working.some(l=>!l.quickResult&&!l.weightUnknown),unknownWeightSets:working.filter(l=>!l.quickResult&&l.weightUnknown).length,
     sets:working.filter(l=>!l.quickResult).length,quickResults:working.filter(l=>l.quickResult).length,warmupSets:logs.filter(l=>l.warmup).length,
     reps:working.filter(l=>!l.quickResult).reduce((sum,l)=>sum+l.reps,0),
     volume:working.reduce((sum,l)=>sum+(l.weightUnknown || l.quickResult ? 0 : l.weight*l.reps),0),

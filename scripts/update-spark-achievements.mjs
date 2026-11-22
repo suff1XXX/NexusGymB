@@ -27,8 +27,8 @@ const block=`    // GymB ACHIEVEMENT BEGIN
       let manual=achievementManual(uid);
       let f=d.facts;
       let earned=achievementEarned(f,manual);
-      return d.keys().hasOnly(['earnedIds','manualIds','facts','score','catalogVersion','updatedAt'])
-        && d.catalogVersion == 3 && d.updatedAt == request.time
+      return d.keys().hasOnly(['earnedIds','manualIds','facts','score','catalogVersion','eventsVersion','updatedAt'])
+        && d.catalogVersion == 3 && d.eventsVersion == 1 && d.updatedAt == request.time
         && f is map && f.keys().hasAll([${metrics.map(([key])=>q(key)).join(',')}])
         && f.keys().hasOnly([${metrics.map(([key])=>q(key)).join(',')}])
         && ${metrics.map(([key,max])=>`f.${key} is int && f.${key} >= 0 && f.${key} <= ${max}`).join('\n        && ')}

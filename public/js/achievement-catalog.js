@@ -21,6 +21,7 @@ export const achievementCatalog = [
   {id:'ceo-praise',name:'Похвала від CEO',hidden:true,manualOnly:true,category:'special',target:1,points:300,tier:'platinum',icon:'star',description:'Особиста відзнака від CEO GymB. Видається через адміністратора.'},
   {id:'best-gymbro',name:'Найкращий GymBro',category:'sport',metric:'sharedWorkouts',target:5,points:150,tier:'gold',icon:'people',description:'Заверши 5 спільних тренувань із GymBro за прийнятими запрошеннями. Кожне тренування мають завершити обидва учасники.'},
   {id:'bad-gymbro',name:'Фіговий GymBro',hidden:true,manualOnly:true,category:'special',target:1,points:0,tier:'bronze',icon:'message',description:'Особлива відзнака від адміністратора. Не додає балів до рейтингу.'},
+  {id:'gymbro-challenge',name:'Виклик прийнято',category:'sport',metric:'challenges',target:1,points:100,tier:'gold',icon:'trophy',description:'Завершіть із GymBro спільний виклик: обидва учасники мають виконати свою ціль у вибраний період.'},
 ];
 export const maxAchievementScore = achievementCatalog.reduce((sum,medal)=>sum+medal.points,0);
 const validDate = value=>typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;

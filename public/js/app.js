@@ -28,6 +28,8 @@ import { invitePlan } from './training-invites.js';
 import { drawProfileCrop } from './profile-image-editor.js';
 import { reportReasons } from './community-safety.js';
 import { workoutSummary } from './workout-summary.js';
+import {weekStart,shiftDate,profileLayout,profileBlocks,defaultBlockOrder} from './training-experience.js';
+import {weeklyGoalCard,comparisonCard,reflectionCard,challengesCard,achievementHistory,layoutEditor} from './training-experience-view.js';
 import { measurementData, measurementFields, measurementSeries } from './body-measurements.js';
 import { manualSetData, progressSessions } from './manual-sets.js';
 import { adminStats } from './admin-stats.js';
@@ -63,6 +65,7 @@ import {
   completeTextSession,
   finishEarly,
 } from "./model.js";
+const experienceStyles=document.createElement('link');experienceStyles.rel='stylesheet';experienceStyles.href=new URL('../training-experience.css',import.meta.url).href;document.head.append(experienceStyles);
 const root = document.querySelector("#app"),
   modal = document.querySelector("#modal");
 const requestedCalendar = new URLSearchParams(location.search).get('date') || '';
@@ -79,6 +82,7 @@ const S = {
   profile: null,
   programs: [],
   sessions: [],
+  weeklyGoals:[],reflections:[],challenges:[],achievementEvents:[],trainingExtrasError:'',comparisonIds:{},
   measurements: [],
   measurementsError: '',
   manualSets: [],
@@ -149,7 +153,7 @@ let editorDraftKey = "", draftRestored = false, draftStored = false;
 let restoreDraft = null;
 let incomingShare = null;
 let stopNotices = null, replyingTo = null;
-let stopAchievementWatch = null;
+let stopAchievementWatch = null,stopMedalEvents=null;
 let imageEdit = null;
 const activity = createActivityTracker({
   send: (uid) => db?.markActive?.(uid) ?? false,
@@ -647,7 +651,7 @@ function render() {
     return;
   }
   const screens = {
-    achievements:()=>achievementsScreen(S.achievements,S.user.uid),
+    achievements:()=>achievementsScreen(S.achievements,S.user.uid)+achievementHistory(S.achievementEvents,S.achievements.progress?.earnedIds||[]),
     home,
     program: programs,
     nutrition,
@@ -879,7 +883,7 @@ function home() {
     session = ongoing(),
     completed = S.sessions.filter((s) => s.status === "completed");
   return (
-    heading(`Привіт, ${esc((S.profile?.name||S.user.displayName)?.split(" ")[0] || "спортсмене")} 👋`, "", owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") + streakCard() +
+    heading(`Привіт, ${esc((S.profile?.name||S.user.displayName)?.split(" ")[0] || "спортсмене")} 👋`, "", owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") + streakCard() + (S.trainingExtrasError?`<div class="notice error" role="alert">${esc(S.trainingExtrasError)} ${btn('Оновити','reload','','secondary')}</div>`:'') + weeklyGoalCard(S.sessions,S.weeklyGoals,localDate()) + challengesCard(S.challenges,S.user.uid,localDate()) +
     (S.settings.announcement
       ? `
           <div class="notice">${esc(S.settings.announcement)}</div>
@@ -1049,7 +1053,7 @@ function history(list) {
               </div>
               ${btn("Повторити тренування", "repeat-history", `data-id="${esc(s.id)}"`, "ghost")}
               ${btn("Виправити", "edit-history", `data-id="${esc(s.id)}"`, "ghost")}
-              ${btn('Підсумок','show-workout-summary',`data-id="${esc(s.id)}"`,'ghost')}
+              ${btn('Підсумок','show-workout-summary',`data-id="${esc(s.id)}"`,'ghost')}${btn('Порівняти','compare-workout',`data-id="${esc(s.id)}"`,'ghost')}
             </div>
           `,
         )
@@ -1751,6 +1755,7 @@ async function loadPeople({ ensure = true, isCurrent, onIdentity } = {}) {
     }
     onIdentity?.({ uid, person });
     const medals=person?.restricted?null:await optional('медалі',()=>db.getLive(`publicProfiles/${uid}/achievements/showcase`),null);
+    const layout=person?.restricted?null:await optional('порядок блоків',()=>db.getLive(`publicProfiles/${uid}/layout/display`),null);
     const recordVisibility = uid===userId ? await optional('видимість рекордів',()=>db.getLive(privatePath('recordSettings/visibility')),null) : null;
     const [relations,comments,labels,block]=await Promise.all([
       optional('Gym Bro',()=>db.gymBros(),[]),
@@ -1772,7 +1777,7 @@ async function loadPeople({ ensure = true, isCurrent, onIdentity } = {}) {
     const workouts = !person?.restricted && (uid === userId || (visibility.activity && visibility.workouts)) ? await optional('активність тренувань', () => db.recentActivity(uid, true), []) : [];
     if (!isCurrent()) return;
     if (uid === userId) S.recordVisibility = recordVisibility;
-    S.people = { achievementShowcase:medals, recent: [...recent, ...workouts].sort((a,b) => activityMillis(b.createdAt)-activityMillis(a.createdAt)).slice(0,30), uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], warnings: [...new Set(warnings)], error: '' };
+    S.people = { layout,achievementShowcase:medals, recent: [...recent, ...workouts].sort((a,b) => activityMillis(b.createdAt)-activityMillis(a.createdAt)).slice(0,30), uid, person, relations, comments: comments.filter((c)=>!S.blocked.some((b)=>b.id === c.authorId)), profiles, stats, publicFriends, block, tags: labels?.tags || [], warnings: [...new Set(warnings)], error: '' };
     if (uid === userId) S.selfPublic = person;
   } catch (error) {
     console.warn('Не вдалося відкрити профіль:', { uid, code: error.code, message: error.message });
@@ -1972,7 +1977,7 @@ function visibleProfileStreak(streak) {
 }
 function sharedStats() {
   const stats=S.people?.stats||{};
-  return `${stats.progress?`<section class="card profile-progress-summary"><h2>Прогрес спортсмена ${privateProfileBadge('progress')}</h2><div class="profile-metrics"><div><strong>${stats.progress.workouts}</strong><span>Тренувань</span></div><div><strong>${stats.progress.sets}</strong><span>Підходів</span></div><div><strong>${Math.round(stats.progress.volume)}</strong><span>кг загалом</span></div></div></section>`:''}${S.people.uid!==S.user.uid&&stats.records?recordsCard(stats.records.items||[]):''}`;
+  return `${stats.progress?`<section class="card profile-progress-summary"><h2>Прогрес спортсмена ${privateProfileBadge('progress')}</h2><div class="profile-metrics"><div><strong>${stats.progress.workouts}</strong><span>Тренувань</span></div><div><strong>${stats.progress.sets}</strong><span>Підходів</span></div><div><strong>${Math.round(stats.progress.volume)}</strong><span>кг загалом</span></div></div></section>`:''}`;
 }
 function profile() {
   if (S.communityLoading && !S.people?.person) return heading('Профіль спортсмена') + '<section class="card" role="status">Завантажуємо профіль…</section>';
@@ -1982,7 +1987,18 @@ function profile() {
   if(person.restricted)return `<div class="athlete-profile">${profileHero(person,false)}<section class="card closed-profile"><h2>Цей профіль закрито</h2><p class="muted">Інформацію профілю та коментарі бачать лише друзі. Надішли заявку, щоб отримати доступ.</p></section></div>`;
   const showFriends=own||profileVisibility(person).gymBros;
   const activity=recentActivityPanel(),showSidebar=showFriends||!!activity;
-return `<div ${profileAppearanceAttributes(person)}>${profileHero(person,own)}${achievementShowcase(S.people.achievementShowcase,{own})}${S.people.warnings?.length?`<section class="card" role="alert"><p>Не вдалося завантажити: ${esc(S.people.warnings.join(', '))}. Решта профілю доступна.</p>${btn('Оновити','reload','','secondary')}</section>`:''}<div class="profile-columns ${showSidebar?'':'no-sidebar'}"><div class="profile-feed">${sharedStats()}${commentsPanel()}${own?`<div id="measurements-view">${measurementsPanel()}</div>${recordsCard()}<div id="progress-view">${progressView()}</div><section class="card"><h2>Історія тренувань ${privateProfileBadge()}</h2>${historyTools()}<div id="history-results">${filteredHistory()}</div></section>`:''}</div>${showSidebar?`<aside class="profile-sidebar">${showFriends?peoplePanel():''}${activity}</aside>`:''}</div></div>`;
+  let layout;try{layout=profileLayout(S.people.layout);}catch{layout=profileLayout();}
+  const sessionById=new Map(S.sessions.map(session=>[session.id,session]));
+  const blockViews={
+    medals:()=>achievementShowcase(S.people.achievementShowcase,{own}),stats:sharedStats,comments:commentsPanel,
+    goals:()=>own?weeklyGoalCard(S.sessions,S.weeklyGoals,localDate()):'',
+    challenges:()=>own?challengesCard(S.challenges,S.user.uid,localDate()):'',
+    records:()=>own?recordsCard():S.people.stats?.records?recordsCard(S.people.stats.records.items||[]):'',progress:()=>own?`<div id="progress-view">${progressView()}</div>`:'',
+    measurements:()=>own?`<div id="measurements-view">${measurementsPanel()}</div>`:'',
+    reflections:()=>own?`<section class="card"><span class="private-label">Бачиш тільки ти</span><h2>Самопочуття</h2>${S.reflections.filter(r=>sessionById.get(r.id)?.status==='completed').sort((a,b)=>sessionById.get(b.id).date.localeCompare(sessionById.get(a.id).date)).slice(0,5).map(r=>{const session=sessionById.get(r.id);return `<div class="reflection-history"><strong>${esc(session.name)} · ${esc(session.date)}</strong><span>Складність ${r.difficulty}/10 · Енергія ${r.energy}/5</span>${btn('Редагувати','workout-reflection',`data-id="${esc(r.id)}"`,'ghost')}</div>`;}).join('')||'<p class="muted">Відмічай самопочуття в підсумку завершеного тренування.</p>'}</section>`:'',
+    history:()=>own?`<section class="card"><h2>Історія тренувань ${privateProfileBadge()}</h2>${historyTools()}<div id="history-results">${filteredHistory()}</div></section>`:'',
+  };
+  return `<div ${profileAppearanceAttributes(person)}>${profileHero(person,own)}${own?`<div class="profile-layout-toolbar">${btn('Налаштувати блоки','edit-profile-blocks','','secondary')}</div>`:''}${S.people.warnings?.length?`<section class="card" role="alert"><p>Не вдалося завантажити: ${esc(S.people.warnings.join(', '))}.</p>${btn('Оновити','reload','','secondary')}</section>`:''}${own&&S.trainingExtrasError?`<p class="error">${esc(S.trainingExtrasError)}</p>`:''}<div class="profile-columns ${showSidebar?'':'no-sidebar'}"><div class="profile-feed">${layout.order.filter(key=>layout.visible.includes(key)).map(key=>blockViews[key]?.()||'').join('')}</div>${showSidebar?`<aside class="profile-sidebar">${showFriends?peoplePanel():''}${activity}</aside>`:''}</div></div>`;
 }
 function profileAppearanceAttributes(person) {
   if(!person?.appearance)return 'class="athlete-profile"';
@@ -2119,16 +2135,22 @@ async function openPerson(uid, commentId = '') {
 }
 function updateNoticeBadge() {
   const badge = document.querySelector('#notice-count');
-  const count = S.notices.filter((n) => !n.read).length;
+  const count = S.notices.filter((n) => !n.read).length+S.achievementEvents.filter(event=>!event.read).length;
   if (badge) { badge.hidden = count === 0; badge.textContent = count > 99 ? '99+' : count; }
   document.querySelector('.notice-bell')?.setAttribute('aria-label', count ? `Сповіщення: ${count} непрочитаних` : 'Сповіщення');
 }
 function noticeInbox() {
   const labels = { comment: 'залишив(-ла) коментар у твоєму профілі', reply: 'відповів(-ла) на твій коментар', friend_request: 'хоче стати твоїм Gym Bro', friend_accepted: 'прийняв(-ла) твою заявку Gym Bro', training_invite:'запрошує на спільне тренування',training_accepted:'прийняв(-ла) запрошення на тренування' };
-  openModal(`<div class="sectionhead"><h2 id="notice-title">СПОВІЩЕННЯ</h2>${btn('Закрити', 'close', '', 'ghost')}</div>${S.notices.some((n)=>!n.read) ? btn('Позначити всі прочитаними', 'read-all-notices', '', 'secondary') : ''}${S.noticeError ? `<p class="error">${esc(S.noticeError)}</p>` : ''}<div class="notice-list">${S.notices.map((n)=>`<button class="notice-item ${n.read ? '' : 'unread'}" data-action="open-notice" data-id="${esc(n.id)}">${personAvatar(n.actor)}<span class="grow"><strong>${esc(n.actor?.name || 'Спортсмен')}</strong><span>${labels[n.type] || 'Нове сповіщення'}</span><time>${displayDate(n.createdAt)}</time></span>${n.read ? '' : '<i aria-label="Непрочитане"></i>'}</button>`).join('') || '<p class="notice-empty muted">Скринька пуста.</p>'}</div>`, 'notice-title', 'notifications-dialog');
+  openModal(`<div class="sectionhead"><h2 id="notice-title">СПОВІЩЕННЯ</h2>${btn('Закрити', 'close', '', 'ghost')}</div>${S.notices.some((n)=>!n.read)||S.achievementEvents.some(event=>!event.read) ? btn('Позначити всі прочитаними', 'read-all-notices', '', 'secondary') : ''}${S.noticeError ? `<p class="error">${esc(S.noticeError)}</p>` : ''}<div class="notice-list">${S.achievementEvents.filter(e=>!e.read).map(event=>{const medal=achievementCatalog.find(m=>m.id===event.medalId);return medal?`<button class="notice-item unread" data-action="open-medal-notice" data-id="${esc(event.id)}">${medalIcon(medal)}<span class="grow"><strong>${esc(medal.name)}</strong><span>${esc(event.reason)}</span><time>${displayDate(event.earnedAt)}</time></span><i aria-label="Непрочитане"></i></button>`:'';}).join('')}${S.notices.map((n)=>`<button class="notice-item ${n.read ? '' : 'unread'}" data-action="open-notice" data-id="${esc(n.id)}">${personAvatar(n.actor)}<span class="grow"><strong>${esc(n.actor?.name || 'Спортсмен')}</strong><span>${labels[n.type] || 'Нове сповіщення'}</span><time>${displayDate(n.createdAt)}</time></span>${n.read ? '' : '<i aria-label="Непрочитане"></i>'}</button>`).join('') || (!S.achievementEvents.some(e=>!e.read)?'<p class="notice-empty muted">Скринька пуста.</p>':'')}</div>`, 'notice-title', 'notifications-dialog');
 }
 function startNoticeWatch() {
   const uid = S.user.uid;
+  stopMedalEvents?.();
+  stopMedalEvents=db.watchAchievementEvents(events=>{
+    if(S.user?.uid!==uid)return;S.achievementEvents=events;updateNoticeBadge();
+    if(modal.open&&modal.classList.contains('notifications-dialog'))noticeInbox();
+    if(S.route==='achievements')render();
+  },error=>console.warn('Історія медалей:',error.code||error.message));
   let revision = 0;
   stopNotices?.();
   stopNotices = db.watchNotifications(async (notices) => {
@@ -2142,7 +2164,7 @@ function startNoticeWatch() {
 }
 function summaryScreen(session) {
   const stats=workoutSummary(session,S.sessions);
-  return `<div class="workout-summary">${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`,btn('Змінити дані тренування','edit-history',`data-id="${esc(session.id)}"`,'secondary'))}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Результати тренування'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">Обсяг — за записаними підходами, без дублювання найкращих результатів.</p><p class="small muted">${stats.quickResults ? `${stats.quickResults} найкращих результатів · ` : ''}${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section><section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Нових рекордів немає.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
+  return `<div class="workout-summary">${S.trainingExtrasError?`<div class="notice error">${esc(S.trainingExtrasError)}</div>`:''}${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`,btn('Змінити дані тренування','edit-history',`data-id="${esc(session.id)}"`,'secondary'))}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Результати тренування'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">Обсяг — за записаними підходами, без дублювання найкращих результатів.</p><p class="small muted">${stats.quickResults ? `${stats.quickResults} найкращих результатів · ` : ''}${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section>${comparisonCard(session,S.sessions,S.comparisonIds[session.id]||'')}${reflectionCard(session,S.reflections.find(r=>r.id===session.id))}<section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Нових рекордів немає.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
 }
 function editMeasurement(id = '') {
   const record=S.measurements.find((m)=>m.id===id);
@@ -2341,7 +2363,7 @@ async function loadAdminAwards(uid,value) {
   try {
     const data=value||await db.adminAchievementAwards(uid);
     if(!box.isConnected||box.dataset.uid!==uid)return;
-    box.innerHTML=`<div class="sectionhead"><h3>GymB ACHIEVEMENT</h3><span class="badge">${data.score} балів · ${data.earnedIds.length} медалей</span></div><form id="admin-award-form" data-uid="${esc(uid)}"><label>Досягнення<select name="medalId">${achievementCatalog.map(medal=>`<option value="${medal.id}">${esc(medal.name)} · ${medal.points} балів${data.earnedIds.includes(medal.id)?' · Отримано':''}</option>`).join('')}</select></label><label>Примітка для адміністратора<input name="note" maxlength="200" placeholder="Необов’язково"/></label><button class="btn" type="submit">Видати досягнення</button><div class="form-error" role="alert"></div></form><h3>Видано адміністратором</h3><div class="admin-awards-list">${(data.manualIds||[]).map(id=>{const medal=achievementCatalog.find(medal=>medal.id===id);return medal?`<div><span><strong>${esc(medal.name)}</strong><small>${medal.points} балів</small></span>${btn('Відкликати','admin-revoke-achievement',`data-id="${medal.id}" data-uid="${esc(uid)}"`,'ghost danger')}</div>`:'';}).join('')||'<p class="muted">Виданих медалей немає.</p>'}</div><p class="small muted">Повторна видача не додає балів. Відкликання ручної видачі не забирає медаль, яку користувач уже отримав автоматично.</p>`;
+    box.innerHTML=`<div class="sectionhead"><h3>GymB ACHIEVEMENT</h3><span class="badge">${data.score} балів · ${data.earnedIds.length} медалей</span></div><form id="admin-award-form" data-uid="${esc(uid)}"><label>Досягнення<select name="medalId">${achievementCatalog.map(medal=>`<option value="${medal.id}">${esc(medal.name)} · ${medal.points} балів${data.earnedIds.includes(medal.id)?' · Отримано':''}</option>`).join('')}</select></label><label>Причина видачі (бачить користувач)<input name="note" maxlength="200" placeholder="Необов’язково"/></label><button class="btn" type="submit">Видати досягнення</button><div class="form-error" role="alert"></div></form><h3>Видано адміністратором</h3><div class="admin-awards-list">${(data.manualIds||[]).map(id=>{const medal=achievementCatalog.find(medal=>medal.id===id);return medal?`<div><span><strong>${esc(medal.name)}</strong><small>${medal.points} балів</small></span>${btn('Відкликати','admin-revoke-achievement',`data-id="${medal.id}" data-uid="${esc(uid)}"`,'ghost danger')}</div>`:'';}).join('')||'<p class="muted">Виданих медалей немає.</p>'}</div><p class="small muted">Повторна видача не додає балів. Відкликання ручної видачі не забирає медаль, яку користувач уже отримав автоматично.</p>`;
   } catch(error) {if(box.isConnected)box.innerHTML=`<p class="error" role="alert">${esc(err(error))}</p>${btn('Повторити','admin-load-awards',`data-uid="${esc(uid)}"`,'secondary')}`;}
 }
 
@@ -2654,6 +2676,7 @@ async function refresh({ isCurrent = () => true } = {}) {
   }
   S.measurementsError = '';
   S.manualSetsError = '';
+  S.trainingExtrasError='';
   const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access, measurements, manualSets] = await Promise.all([
     db.list(privatePath("programs")),
     db.list(privatePath("sessions")),
@@ -2692,6 +2715,12 @@ async function refresh({ isCurrent = () => true } = {}) {
     settings: settings || S.settings,
     loaded: true,
   });
+  if(['home','profile','session'].includes(S.route)) {
+    try {
+      const [goals,reflections,challenges]=await Promise.all([db.weeklyGoals(),db.list(privatePath('workoutReflections')),db.syncChallenges(sessions)]);
+      if(isCurrent()) {S.weeklyGoals=goals;S.reflections=reflections;S.challenges=challenges;}
+    } catch(error) {if(isCurrent())S.trainingExtrasError='Не вдалося завантажити цілі, самопочуття або виклики. Спробуй оновити сторінку.';}
+  }
   if (S.route === 'nutrition' || (owner() && S.route === 'admin')) await loadNutrition();
   if (navigator.onLine && S.publicProfileReady) db.publishProfileStats(sessions,manualSets).catch((error) => console.warn('Статистика профілю:', error.code));
 }
@@ -2714,11 +2743,51 @@ async function saveSession(s) {
   if (s.status === "completed" && s.programId === active()?.id && active()?.scheduleMode === "sequence") chosenDay = null;
   render();
 }
+async function editWeeklyGoal() {
+  const week=weekStart(localDate()),goal=await db.getLive(privatePath(`weeklyGoals/${week}`));
+  openModal(`<div class="sectionhead"><h2 id="weekly-goal-title">Ціль на тиждень</h2>${btn('Закрити','close','','ghost')}</div><p class="muted">${week} — ${shiftDate(week,6)} · бачиш тільки ти</p><form id="weekly-goal-form"><label>Кількість тренувань<input name="target" type="number" min="1" max="14" step="1" required value="${goal?.target||3}"/></label><button class="btn" type="submit">Зберегти ціль</button><div class="form-error" role="alert"></div></form>`,'weekly-goal-title');
+}
+async function editWorkoutReflection(id) {
+  const session=S.sessions.find(s=>s.id===id&&s.status==='completed');if(!session)throw Error('Обери завершене тренування.');
+  const value=await db.getLive(privatePath(`workoutReflections/${id}`));
+  openModal(`<div class="sectionhead"><h2 id="reflection-title">Самопочуття</h2>${btn('Закрити','close','','ghost')}</div><p class="muted">${esc(session.name)} · ${session.date} · бачиш тільки ти</p><form id="workout-reflection-form" data-id="${esc(id)}"><div class="formgrid"><label>Складність · 1–10<input type="number" name="difficulty" min="1" max="10" step="1" value="${value?.difficulty||5}" required/></label><label>Енергія · 1–5<input type="number" name="energy" min="1" max="5" step="1" value="${value?.energy||3}" required/></label></div><label>Нотатка<textarea name="note" rows="4" maxlength="1000" placeholder="Що було легко або складно?">${esc(value?.note||'')}</textarea></label><button class="btn" type="submit">Зберегти самопочуття</button>${value?btn('Видалити запис','delete-reflection',`data-id="${esc(id)}"`,'ghost danger'):''}<div class="form-error" role="alert"></div></form>`,'reflection-title');
+}
+async function newChallenge() {
+  const relations=(await db.gymBros()).filter(r=>r.status==='accepted'),ids=[...new Set(relations.map(r=>r.members.find(id=>id!==S.user.uid)))];
+  const friends=await Promise.all(ids.map(async id=>({id,person:await db.publicIdentity(id)})));
+  if(!friends.length){openModal(`<h2>Спільний виклик</h2><p>Спочатку додай GymBro. Виклик можна створити після прийняття заявки в друзі.</p>${btn('Закрити','close')}`);return;}
+  openModal(`<div class="sectionhead"><h2 id="challenge-title">Спільний виклик GymBro</h2>${btn('Закрити','close','','ghost')}</div><p class="muted">Кожен виконує свою ціль. GymBro має прийняти запрошення. Видно лише кількість тренувань.</p><form id="gym-challenge-form"><label>Назва<input name="title" maxlength="80" required value="Місяць тренувань разом"/></label><label>GymBro<select name="partnerId" required>${friends.map(f=>`<option value="${esc(f.id)}">${esc(f.person?.name||'GymBro')}</option>`).join('')}</select></label><label>Тренувань на кожного<input name="target" type="number" min="1" max="30" step="1" value="4" required/></label><div class="formgrid"><label>Початок<input name="startDate" type="date" min="${localDate()}" value="${localDate()}" required/></label><label>Завершення<input name="endDate" type="date" min="${localDate()}" value="${shiftDate(localDate(),30)}" required/></label></div><button class="btn" type="submit">Запросити GymBro</button><div class="form-error" role="alert"></div></form>`,'challenge-title');
+}
+async function refreshChallengeList() {S.challenges=await db.syncChallenges(S.sessions);await db.refreshAchievements();}
 async function action(a, b) {
   const id = b.dataset.id,
     n = +b.dataset.n,
     j = +b.dataset.j;
   switch (a) {
+    case 'weekly-goal':await editWeeklyGoal();break;
+    case 'workout-reflection':await editWorkoutReflection(id);break;
+    case 'delete-reflection':
+      await db.remove(privatePath(`workoutReflections/${id}`));S.reflections=S.reflections.filter(r=>r.id!==id);modal.close();render();toast('Запис видалено');break;
+    case 'new-challenge':await newChallenge();break;
+    case 'refresh-challenges':await refreshChallengeList();render();toast('Прогрес викликів оновлено');break;
+    case 'respond-challenge':await db.respondChallenge(id,b.dataset.status);await refreshChallengeList();render();toast('Виклик оновлено');break;
+    case 'compare-workout': {
+      const session=S.sessions.find(s=>s.id===id&&s.status==='completed');if(!session)throw Error('Тренування недоступне.');
+      openModal(`<div class="sectionhead"><h2>Порівняння результатів</h2>${btn('Закрити','close','','ghost')}</div>${comparisonCard(session,S.sessions,S.comparisonIds[id]||'')}`);break;
+    }
+    case 'edit-profile-blocks':openModal(layoutEditor(await db.getLive(`publicProfiles/${S.user.uid}/layout/display`)),'profile-layout-title');break;
+    case 'move-profile-block': {
+      const row=b.closest('[data-layout-key]'),list=row.parentElement,direction=Number(b.dataset.direction);
+      if(direction<0&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);
+      if(direction>0&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row);
+      [...list.children].forEach((item,index)=>{item.querySelector('[data-direction="-1"]').disabled=index===0;item.querySelector('[data-direction="1"]').disabled=index===list.children.length-1;});break;
+    }
+    case 'reset-profile-blocks':openModal(layoutEditor(null),'profile-layout-title');break;
+    case 'read-medal-events':
+      await db.readAchievementEvents(S.achievementEvents.filter(e=>!e.read).map(e=>e.id));S.achievementEvents.forEach(e=>e.read=true);updateNoticeBadge();render();break;
+    case 'open-medal-notice':
+      await db.readAchievementEvents([id]);location.assign(new URL('achievements.html#achievement-history',appBase).href);break;
+
     case 'edit-exercise-result':editExerciseResult(id,b.dataset.session,Number(b.dataset.log));break;
     case 'admin-load-awards':await loadAdminAwards(b.dataset.uid);break;
     case 'admin-revoke-achievement': {
@@ -2895,7 +2964,8 @@ async function action(a, b) {
     }
     case 'open-notices': noticeInbox(); break;
     case 'read-all-notices':
-      await db.readNotifications(S.notices.filter((n)=>!n.read).map((n)=>n.id));
+      await Promise.all([db.readNotifications(S.notices.filter((n)=>!n.read).map((n)=>n.id)),db.readAchievementEvents(S.achievementEvents.filter(event=>!event.read).map(event=>event.id))]);
+      S.achievementEvents.forEach(event=>{event.read=true;});
       S.notices.forEach((n)=>{ n.read = true; }); updateNoticeBadge(); noticeInbox();
       break;
     case 'open-notice': {
@@ -3892,6 +3962,20 @@ document.addEventListener("submit", async (event) => {
   busy = true;
   button.disabled = true;
   try {
+    if(f.id==='weekly-goal-form') {
+      const goal=await db.saveWeeklyGoal(weekStart(localDate()),v.get('target'));S.weeklyGoals=[goal,...S.weeklyGoals.filter(g=>g.week!==goal.week)];modal.close();render();toast('Ціль збережено');
+    }
+    if(f.id==='workout-reflection-form') {
+      const value=await db.saveWorkoutReflection(f.dataset.id,Object.fromEntries(v));S.reflections=[value,...S.reflections.filter(r=>r.id!==value.id)];modal.close();render();toast('Самопочуття збережено');
+    }
+    if(f.id==='gym-challenge-form') {
+      await db.createChallenge(String(v.get('partnerId')),Object.fromEntries(v));await refreshChallengeList();modal.close();render();toast('Запрошення до виклику надіслано');
+    }
+    if(f.id==='profile-layout-form') {
+      const value={order:[...f.querySelectorAll('[data-layout-key]')].map(row=>row.dataset.layoutKey),visible:v.getAll('visible')};
+      const layout=await db.saveProfileLayout(value);if(S.people)S.people.layout=layout;modal.close();render();toast('Блоки профілю збережено');
+    }
+
     if(f.id==='manual-set-form') {
       const name=String(v.get('exercise')||'');
       const data=manualSetData({exercise:name,exerciseKey:manualExerciseKey(name),weight:v.get('weight'),reps:Number(v.get('reps')),date:v.get('date')});
@@ -4356,6 +4440,7 @@ async function handleUser(user) {
   const isCurrent = () => revision === userLoadRevision && db.auth.currentUser?.uid === user?.uid;
   stopNotices?.(); stopNotices = null;
   stopAchievementWatch?.();stopAchievementWatch=null;
+  stopMedalEvents?.();stopMedalEvents=null;S.achievementEvents=[];S.weeklyGoals=[];S.reflections=[];S.challenges=[];S.trainingExtrasError='';
   S.achievements={progress:null,display:{selectedIds:[],rankingEnabled:false},leaders:[],motionPaused:achievementMotionPaused(),onlyEarned:false,dirty:false,loading:false,error:'',leaderError:''};
   S.notices = []; S.noticeError = ''; S.selfPublic = null; replyingTo = null;
   S.blocked=[]; S.blockedProfiles={}; S.reports=[]; S.reportProfiles={}; S.invites=[];
@@ -4491,3 +4576,10 @@ document.addEventListener("click", (e) => {
 });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register(new URL("../sw.js", import.meta.url)).catch(() => {});
 boot();
+
+document.addEventListener('change',event=>{
+  const input=event.target;if(!input.matches('[data-compare-workout]'))return;
+  const id=input.dataset.compareWorkout,session=S.sessions.find(s=>s.id===id);if(!session)return;
+  S.comparisonIds[id]=input.value;
+  const card=input.closest('.workout-comparison');card.outerHTML=comparisonCard(session,S.sessions,input.value);
+});

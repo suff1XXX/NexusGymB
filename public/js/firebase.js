@@ -13,6 +13,7 @@ import { statsSignature, publishOnce } from './stats-publication.js';
 import { activityMillis } from './activity.js';
 import { achievementCatalog,achievementFacts } from './achievement-catalog.js';
 import {sparkProgress,sparkDisplay,sameSparkProgress} from './achievement-spark.js';
+import {challengeData,challengeCount,reflectionData,profileLayout,weekStart} from './training-experience.js';
 let api,
   registering = false, connecting;
 const authListeners = new Set();
@@ -133,6 +134,8 @@ async function initialize() {
     }
     const facts=achievementFacts({uid,today,sessions,programs,exercises,friends,profile:profile||{},sharedWorkouts,activeDays:activity?.count||0,
       comments:comments.docs.filter(doc=>/^(publicProfiles|exercises|programTemplates)\/[^/]+\/comments\/[^/]+$/.test(doc.ref.path)).map(doc=>doc.data())});
+    const challenges=await api.syncChallenges(sessions);
+    facts.challenges=challenges.filter(c=>c.status==='accepted'&&c.members.every(member=>(c.progress[member]||0)>=c.target)).length;
     if(auth.currentUser?.uid!==uid)throw Error('Обліковий запис змінився.');
     return publishSpark(uid,facts);
   }
@@ -145,16 +148,27 @@ async function initialize() {
       if(!account.exists())throw Error('Користувача не знайдено.');
       let manualIds=grants.data()?.ids||[];
       if(award?.action==='list')return {earnedIds:progress.data()?.earnedIds||[],manualIds,score:progress.data()?.score||0};
+      let changedGrant=false;
       if(award) {
         const requested=award.action==='grant'?[...manualIds,award.medalId]:manualIds.filter(id=>id!==award.medalId);
         const ids=achievementCatalog.filter(medal=>requested.includes(medal.id)).map(medal=>medal.id);
-        if(JSON.stringify(ids)!==JSON.stringify(manualIds)) {
-          manualIds=ids;
-          tx.set(grantsRef,{ids,updatedAt:C.serverTimestamp(),updatedBy:auth.currentUser.uid});
-          tx.set(auditRef,{medalId:award.medalId,action:award.action,note:award.note.trim(),actorId:auth.currentUser.uid,createdAt:C.serverTimestamp()});
-        }
+        changedGrant=JSON.stringify(ids)!==JSON.stringify(manualIds);manualIds=ids;
       }
       const next=sparkProgress({...(facts||progress.data()?.facts||{}),activeDays:activity.data()?.count||0},manualIds);
+      const newIds=next.earnedIds.filter(id=>progress.data()?.eventsVersion!==1||!progress.data()?.earnedIds?.includes(id));
+      const eventRefs=newIds.map(id=>C.doc(db,`users/${uid}/achievementEvents/${id}`));
+      const existingEvents=await Promise.all(eventRefs.map(ref=>tx.get(ref)));
+      if(changedGrant) {
+        tx.set(grantsRef,{ids:manualIds,updatedAt:C.serverTimestamp(),updatedBy:auth.currentUser.uid});
+        tx.set(auditRef,{medalId:award.medalId,action:award.action,note:award.note.trim(),actorId:auth.currentUser.uid,createdAt:C.serverTimestamp()});
+      }
+      eventRefs.forEach((ref,index)=>{
+        if(existingEvents[index].exists())return;
+        const medal=achievementCatalog.find(m=>m.id===newIds[index]),manual=manualIds.includes(medal.id);
+        const reason=manual?(award?.medalId===medal.id&&award.action==='grant'&&award.note.trim()||'Видано адміністратором'):medal.description;
+        const migrated=progress.exists()&&progress.data().eventsVersion!==1&&progress.data().earnedIds?.includes(medal.id);
+        tx.set(ref,{medalId:medal.id,source:manual?'admin':'automatic',reason:(migrated?'Додано до історії. ':'')+reason,earnedAt:C.serverTimestamp(),read:false});
+      });
       const savedDisplay=settings.data(),nextDisplay=sparkDisplay(display||savedDisplay,next.earnedIds);
       if(display&&JSON.stringify(nextDisplay.selectedIds)!==JSON.stringify(display.selectedIds))throw Error('Цю медаль ще не отримано. Онови прогрес.');
       const progressChanged=!sameSparkProgress(progress.data(),next);
@@ -207,6 +221,60 @@ async function initialize() {
     async saveNutritionGenerator(value) {
       requireOnline();
       await commit([{kind:'save',path:`users/${auth.currentUser.uid}/nutrition/generator`,data:value}]);
+    },
+    async weeklyGoals() {
+      requireOnline();return (await C.getDocsFromServer(C.query(C.collection(db,`users/${auth.currentUser.uid}/weeklyGoals`),C.orderBy('week','desc'),C.limit(12)))).docs.map(doc=>({...doc.data(),id:doc.id}));
+    },
+    async saveWeeklyGoal(week,target) {
+      requireOnline();target=Number(target);
+      if(weekStart(week)!==week||!Number.isInteger(target)||target<1||target>14)throw Error('Ціль: від 1 до 14 тренувань на тиждень.');
+      await commit([{kind:'save',path:`users/${auth.currentUser.uid}/weeklyGoals/${week}`,data:{week,target,updatedAt:C.serverTimestamp()}}]);
+      return {week,target,id:week};
+    },
+    async saveWorkoutReflection(id,value) {
+      requireOnline();const data=reflectionData(value);
+      await commit([{kind:'save',path:`users/${auth.currentUser.uid}/workoutReflections/${id}`,data:{...data,updatedAt:C.serverTimestamp()}}]);return {...data,id};
+    },
+    async saveProfileLayout(value) {
+      requireOnline();const data=profileLayout(value);
+      await commit([{kind:'save',path:`publicProfiles/${auth.currentUser.uid}/layout/display`,data:{...data,updatedAt:C.serverTimestamp()}}]);return data;
+    },
+    async challenges() {
+      requireOnline();const uid=auth.currentUser.uid;
+      const docs=await C.getDocsFromServer(C.query(C.collection(db,'gymChallenges'),C.where('members','array-contains',uid),C.orderBy('createdAt','desc'),C.limit(50)));
+      return Promise.all(docs.docs.map(async doc=>{
+        const value={...doc.data(),id:doc.id},partner=value.members.find(member=>member!==uid);
+        value.partnerName=(await api.publicIdentity(partner).catch(()=>null))?.name||'GymBro';value.progress={};
+        if(value.status==='accepted')await Promise.all(value.members.map(async member=>{const p=await readSpark(`gymChallenges/${doc.id}/progress/${member}`);value.progress[member]=p?.count||0;}));
+        return value;
+      }));
+    },
+    async createChallenge(partnerId,value) {
+      requireOnline();const uid=auth.currentUser.uid,today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),data=challengeData(value,today);
+      if(!partnerId||partnerId===uid)throw Error('Обери GymBro.');
+      const ref=C.doc(C.collection(db,'gymChallenges'));
+      await C.setDoc(ref,{...data,creatorId:uid,partnerId,members:[uid,partnerId],status:'pending',startsAt:C.Timestamp.fromDate(new Date(data.startDate+'T00:00:00Z')),endsAt:C.Timestamp.fromDate(new Date(data.endDate+'T23:59:59Z')),createdAt:C.serverTimestamp()});
+      return ref.id;
+    },
+    async respondChallenge(id,status) {
+      requireOnline();if(!['accepted','declined','cancelled'].includes(status))throw Error('Перевір дію.');
+      await C.updateDoc(C.doc(db,`gymChallenges/${id}`),{status,respondedAt:C.serverTimestamp()});
+      scheduleSparkRefresh();
+    },
+    async syncChallenges(sessions) {
+      const uid=auth.currentUser.uid,items=await api.challenges(),today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+      for(const challenge of items.filter(c=>c.status==='accepted')) {
+        const count=challengeCount(sessions,challenge,today);
+        if(count!==(challenge.progress[uid]||0))await C.setDoc(C.doc(db,`gymChallenges/${challenge.id}/progress/${uid}`),{count,updatedAt:C.serverTimestamp()});
+        challenge.progress[uid]=count;
+      }
+      return items;
+    },
+    watchAchievementEvents(onChange,onError) {
+      return C.onSnapshot(C.query(C.collection(db,`users/${auth.currentUser.uid}/achievementEvents`),C.orderBy('earnedAt','desc'),C.limit(30)),snapshot=>onChange(snapshot.docs.map(doc=>({...doc.data(),id:doc.id}))),onError);
+    },
+    async readAchievementEvents(ids) {
+      requireOnline();await commit(ids.slice(0,30).map(id=>({kind:'patch',path:`users/${auth.currentUser.uid}/achievementEvents/${id}`,data:{read:true}})));
     },
     async adminAchievementAwards(uid,action='list',medalId='',note='') {
       requireOnline();

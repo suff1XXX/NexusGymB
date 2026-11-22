@@ -4,6 +4,10 @@
     "queryScope": "COLLECTION",
     "fields": [{ "fieldPath": "members", "arrayConfig": "CONTAINS" }, { "fieldPath": "status", "order": "ASCENDING" }]
   }, {
+    "collectionGroup": "gymChallenges",
+    "queryScope": "COLLECTION",
+    "fields": [{"fieldPath":"members","arrayConfig":"CONTAINS"},{"fieldPath":"createdAt","order":"DESCENDING"}]
+  }, {
     "collectionGroup": "achievementScores",
     "queryScope": "COLLECTION",
     "fields": [{"fieldPath":"score","order":"DESCENDING"},{"fieldPath":"customId","order":"ASCENDING"}]

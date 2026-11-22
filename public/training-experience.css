@@ -1,0 +1,55 @@
+.weekly-goal-card,.gymbro-challenges,.workout-comparison,.workout-reflection,.achievement-history { margin-block:24px; }
+.experience-kicker { display:block;color:var(--muted);font-size:13px;letter-spacing:.4px;margin-bottom:8px; }
+.weekly-goal-card .sectionhead,.gymbro-challenges .sectionhead,.workout-reflection .sectionhead,.workout-comparison .sectionhead { gap:16px;flex-wrap:wrap; }
+.weekly-goal-card h2,.gymbro-challenges h2,.workout-comparison h2,.workout-reflection h2 { margin:0;font-size:24px;letter-spacing:-.6px; }
+.goal-count { display:flex;align-items:center;flex-wrap:wrap;gap:14px;margin:22px 0 16px; }
+.goal-count>strong { font-size:42px;letter-spacing:-2px;line-height:1.2; }
+.goal-count small { font-size:25px;font-weight:400;color:var(--muted); }
+.goal-count>span { font-size:14px;color:var(--muted); }
+.experience-meter { height:8px;background:var(--line);border-radius:99px;overflow:hidden; }
+.experience-meter>i { display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--blue),color-mix(in srgb,var(--blue) 55%,#66d5b5)); }
+.experience-details { border:0;margin:18px 0 12px; }
+.experience-details summary { font-size:14px;cursor:pointer;color:var(--text); }
+.experience-details p { color:var(--muted);font-size:14px;line-height:1.7; }
+.comparison-metrics { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:22px 0; }
+.comparison-metrics>div { display:grid;gap:7px;padding:16px;background:var(--soft);border-radius:16px;color:var(--text); }
+.comparison-metrics span,.comparison-metrics small { font-size:13px;line-height:1.5;color:var(--muted); }
+.comparison-metrics strong { font-size:28px;letter-spacing:-.7px;overflow-wrap:anywhere; }
+.experience-table { overflow-x:auto;margin-bottom:20px; }
+.experience-table table { width:100%;min-width:440px;border-collapse:collapse;font-size:14px;text-align:left; }
+.experience-table th,.experience-table td { padding:14px 10px;border-bottom:1px solid var(--line); }
+.experience-table thead th { font-size:12px;font-weight:500;color:var(--muted); }
+.experience-table small { display:block;font-size:12px;color:var(--muted);margin-top:5px; }
+.reflection-scores { display:flex;flex-wrap:wrap;gap:20px;margin-top:22px;font-size:14px;color:var(--muted); }
+.reflection-scores strong { color:var(--text);font-size:20px;margin-left:7px; }
+.reflection-note { white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7; }
+.reflection-history { display:grid;gap:8px;padding-block:18px;border-bottom:1px solid var(--line);font-size:14px; }
+.reflection-history>span { color:var(--muted); }.reflection-history>.btn { justify-self:start; }
+.challenge-list { display:grid;gap:16px;margin-top:22px;max-height:680px;overflow:auto; }
+.challenge-card { border:1px solid var(--line);border-radius:18px;padding:20px;background:var(--bg); }
+.challenge-card h3 { margin:0;font-size:18px;overflow-wrap:anywhere; }
+.challenge-card .badge { white-space:normal;line-height:1.5; }
+.challenge-track { display:grid;gap:10px;margin:20px 0 4px; }
+.challenge-track>span { display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:14px; }
+.challenge-track strong { color:var(--text); }.challenge-track .experience-meter { height:6px;margin-bottom:8px; }
+.achievement-history { scroll-margin-top:110px; }.achievement-history h2 { font-size:24px; }
+.achievement-history-item { display:flex;align-items:center;gap:18px;padding:20px 0;border-bottom:1px solid var(--line); }
+.achievement-history-item:last-child { border-bottom:0; }.achievement-history-item>.achievement-medal { width:54px; }
+.achievement-history-item>div { flex:1;min-width:0; }.achievement-history-item strong { font-size:16px; }
+.achievement-history-item p { font-size:14px;line-height:1.6;margin:7px 0;overflow-wrap:anywhere; }
+.notice-item>.achievement-medal { width:42px; }.profile-layout-toolbar { display:flex;justify-content:flex-end;margin:20px 0; }
+.profile-layout-list { display:grid;gap:10px;margin:22px 0; }
+.profile-layout-list>[data-layout-key] { display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--bg); }
+.profile-layout-list label { display:flex;align-items:center;gap:12px;margin:0;font-size:14px;min-width:0; }
+.profile-layout-list input { width:19px;height:19px;margin:0;accent-color:var(--blue); }
+.profile-layout-list small { display:block;color:var(--muted);font-size:12px;margin-top:5px; }
+.profile-layout-list [data-layout-key]>div { display:flex;gap:6px;flex-shrink:0; }
+.profile-layout-list .btn { font-size:12px;min-height:44px;padding:10px; }
+@media(max-width:700px) {
+  .comparison-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.comparison-metrics>div { padding:14px; }
+  .weekly-goal-card h2,.gymbro-challenges h2,.workout-comparison h2,.workout-reflection h2 { font-size:21px; }
+  .goal-count>strong { font-size:36px; }.challenge-card { padding:16px; }
+  .achievement-history-item { align-items:flex-start;gap:12px; }.achievement-history-item>.achievement-medal { width:44px; }
+  .achievement-history-item>.badge { font-size:11px;padding:5px; }.achievement-history-item .small { font-size:12px; }
+  .profile-layout-list>[data-layout-key] { padding:12px;gap:8px; }.profile-layout-list label { gap:8px;font-size:13px; }
+}

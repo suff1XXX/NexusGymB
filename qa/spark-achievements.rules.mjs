@@ -2,6 +2,8 @@ import {readFileSync} from 'node:fs';
 import {initializeTestEnvironment,assertFails} from '@firebase/rules-unit-testing';
 import * as C from 'firebase/firestore';
 import assert from 'node:assert/strict';
+import {weekStart,shiftDate,defaultBlockOrder} from '../public/js/training-experience.js';
+import {achievementCatalog} from '../public/js/achievement-catalog.js';
 
 const owner='ljYr2MF28zg1zAFsD7M1sNH6s8O2';
 const env=await initializeTestEnvironment({projectId:'demo-nexus-gymb',firestore:{rules:readFileSync('firestore.rules','utf8')}});
@@ -76,6 +78,60 @@ try {
   progress=await alice.api.refreshAchievements();assert.equal(progress.facts.sharedWorkouts,4);assert.ok(!progress.earnedIds.includes('best-gymbro'));
   await assertFails(C.updateDoc(C.doc(alice.db,'users/alice/achievementActivity/current'),{count:30,updatedAt:C.serverTimestamp()}));
   await assertFails(C.setDoc(C.doc(bob.db,'trainingInvites/shared-0/completions/alice'),{completed:true,updatedAt:C.serverTimestamp()}));
-  if(process.env.QA_BROWSER_PATH)await (await import('./spark-achievements.browser.mjs')).checkSparkBrowser(owner);
-  console.log('Spark achievements passed: real client refresh, private data, fixed scores, owner grants, duplicate protection, showcase, opt-out, daily limits and shared completion proofs.');
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  await alice.api.saveWeeklyGoal(weekStart(today),4);
+  assert.equal((await alice.api.weeklyGoals())[0].target,4);
+  await assertFails(C.getDoc(C.doc(bob.db,`users/alice/weeklyGoals/${weekStart(today)}`)));
+  await assertFails(C.getDoc(C.doc(ceo.db,`users/alice/weeklyGoals/${weekStart(today)}`)));
+  await assertFails(C.setDoc(C.doc(alice.db,`users/alice/weeklyGoals/${weekStart(today)}`),{week:weekStart(today),target:99,updatedAt:C.serverTimestamp()}));
+  await alice.api.saveWorkoutReflection('first',{difficulty:7,energy:4,note:'Приватна нотатка'});
+  assert.equal((await get(alice.db,'users/alice/workoutReflections/first')).note,'Приватна нотатка');
+  await assertFails(C.getDoc(C.doc(bob.db,'users/alice/workoutReflections/first')));
+  await assertFails(C.getDoc(C.doc(ceo.db,'users/alice/workoutReflections/first')));
+  await assert.rejects(alice.api.saveWorkoutReflection('missing',{difficulty:3,energy:3,note:''}));
+  await alice.api.saveProfileLayout({order:[...defaultBlockOrder].reverse(),visible:['medals','goals','comments']});
+  assert.equal((await get(bob.db,'publicProfiles/alice/layout/display')).order[0],'comments');
+  await assertFails(C.setDoc(C.doc(bob.db,'publicProfiles/alice/layout/display'),{order:defaultBlockOrder,visible:defaultBlockOrder,updatedAt:C.serverTimestamp()}));
+  await alice.api.saveProfileLayout({order:defaultBlockOrder,visible:defaultBlockOrder});
+  const event=await get(alice.db,'users/alice/achievementEvents/first-workout');
+  assert.equal(event.medalId,'first-workout');assert.equal(event.source,'automatic');
+  await alice.api.readAchievementEvents(['first-workout']);
+  assert.equal((await get(alice.db,'users/alice/achievementEvents/first-workout')).read,true);
+  await assertFails(C.getDoc(C.doc(bob.db,'users/alice/achievementEvents/first-workout')));
+  await assertFails(C.updateDoc(C.doc(alice.db,'users/alice/achievementEvents/first-workout'),{reason:'Підміна'}));
+  await assertFails(C.deleteDoc(C.doc(alice.db,'users/alice/achievementEvents/first-workout')));
+  await env.withSecurityRulesDisabled(async context=>{
+    const db=context.firestore();
+    await C.setDoc(C.doc(db,'gymBros/alice_bob'),{from:'alice',to:'bob',members:['alice','bob'],status:'accepted'});
+    for(const uid of ['alice','bob'])await C.setDoc(C.doc(db,`users/${uid}/sessions/experience-new`),{...workout,name:'Тестові ноги',date:today,programId:'p',dayId:1,startedAt:Date.now()-2700000,endedAt:Date.now(),logs:[{index:0,weight:65,reps:12}]});
+  });
+  const challenge=await alice.api.createChallenge('bob',{title:'Разом до цілі',target:1,startDate:today,endDate:shiftDate(today,7)});
+  await assert.rejects(alice.api.respondChallenge(challenge,'accepted'));
+  await bob.api.respondChallenge(challenge,'accepted');
+  await assertFails(C.updateDoc(C.doc(bob.db,`gymChallenges/${challenge}`),{target:30}));
+  await assertFails(C.getDoc(C.doc(ceo.db,`gymChallenges/${challenge}`)));
+  await alice.api.refreshAchievements();progress=await bob.api.refreshAchievements();
+  assert.equal(progress.facts.challenges,1);assert.ok(progress.earnedIds.includes('gymbro-challenge'));
+  progress=await alice.api.refreshAchievements();assert.ok(progress.earnedIds.includes('gymbro-challenge'));
+  await assertFails(C.setDoc(C.doc(bob.db,`gymChallenges/${challenge}/progress/alice`),{count:0,updatedAt:C.serverTimestamp()}));
+  await env.withSecurityRulesDisabled(async context=>C.deleteDoc(C.doc(context.firestore(),'users/bob/sessions/experience-new')));
+  await bob.api.refreshAchievements();progress=await alice.api.refreshAchievements();assert.ok(!progress.earnedIds.includes('gymbro-challenge'));
+  await env.withSecurityRulesDisabled(async context=>{
+    const db=context.firestore();
+    await C.setDoc(C.doc(db,'users/all-medals'),{name:'Всі медалі',email:'all-medals@example.test',customId:99,createdAt:1});
+    await C.setDoc(C.doc(db,'publicProfiles/all-medals'),{name:'Всі медалі',photo:'',customId:99,joinedAt:1});
+    await C.setDoc(C.doc(db,'users/all-medals/achievementGrants/current'),{ids:achievementCatalog.map(m=>m.id),updatedAt:C.Timestamp.now(),updatedBy:owner});
+  });
+  const allMedals=await client('all-medals');
+  assert.equal((await allMedals.api.refreshAchievements()).earnedIds.length,achievementCatalog.length);
+  assert.equal((await C.getDocs(C.collection(allMedals.db,'users/all-medals/achievementEvents'))).size,achievementCatalog.length);
+  if(process.env.QA_BROWSER_PATH) {
+    await env.withSecurityRulesDisabled(async context=>{
+      const db=context.firestore();
+      await C.updateDoc(C.doc(db,'publicProfiles/alice'),{visibility:{records:true}});
+      await C.setDoc(C.doc(db,'publicProfiles/alice/stats/records'),{items:[{key:'squat',name:'Присідання',weight:65,reps:12,date:today}]});
+    });
+    await (await import('./spark-achievements.browser.mjs')).checkSparkBrowser(owner);
+  }
+  console.log('Spark rules passed: achievements, fixed scoring, private goals and reflections, layout ownership, immutable medal history, challenge acceptance and completion, and all-medal migration.');
 } finally {await env.cleanup();}
