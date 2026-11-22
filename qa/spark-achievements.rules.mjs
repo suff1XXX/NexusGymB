@@ -1,3 +1,4 @@
+import {profileAppearance} from '../public/js/profile-appearance.js';
 import {readFileSync} from 'node:fs';
 import {initializeTestEnvironment,assertFails} from '@firebase/rules-unit-testing';
 import * as C from 'firebase/firestore';
@@ -29,6 +30,7 @@ try {
     for(const [i,uid] of ['alice','bob',owner].entries()) {
       await C.setDoc(C.doc(admin,`users/${uid}`),{name:uid,email:`${uid}@example.test`,customId:i+1,createdAt:1});
       await C.setDoc(C.doc(admin,`publicProfiles/${uid}`),{name:uid,photo:'',customId:i+1,joinedAt:1});
+      await C.setDoc(C.doc(admin,`userNumbers/${i+1}`),{uid});
     }
     await C.setDoc(C.doc(admin,'users/alice/sessions/first'),workout);
     await C.setDoc(C.doc(admin,'publicProfiles/bob/comments/c'),{authorId:'alice',text:'Коментар',createdAt:1});
@@ -176,6 +178,15 @@ try {
   await alice.api.readNotifications(Array.from({length:135},(_,i)=>`old_${i}`));
   assert.equal((await get(alice.db,'users/alice/notifications/old_134')).read,true);
   assert.equal((await get(alice.db,'users/alice/notifications/old_0')).read,true);
+  const customHeader=profileAppearance({headerMode:'custom',headerTitle:'Alice GymB',headerBackground:'#162238',headerAccent:'#a5d5ff',headerSurface:'gradient',headerShape:'pill'});
+  await assertFails(C.updateDoc(C.doc(alice.db,'publicProfiles/alice'),{appearance:customHeader}));
+  await env.withSecurityRulesDisabled(async context=>C.setDoc(C.doc(context.firestore(),'userAccess/alice'),{profileCustomization:true}));
+  await alice.api.patch('publicProfiles/alice',{appearance:customHeader});
+  assert.equal((await get(bob.db,'publicProfiles/alice')).appearance.headerTitle,'Alice GymB');
+  await assertFails(C.updateDoc(C.doc(bob.db,'publicProfiles/alice'),{appearance:{...customHeader,headerTitle:'Forged'}}));
+  for(const invalid of [{headerTitle:'x'.repeat(33)},{headerTitle:'\nBad'},{headerMode:'hidden'},{headerBackground:'url(https://example.test)'},{headerSurface:'image'}])await assertFails(C.updateDoc(C.doc(alice.db,'publicProfiles/alice'),{appearance:{...customHeader,...invalid}}));
+  const legacyAppearance=Object.fromEntries(Object.entries(customHeader).filter(([key])=>!key.startsWith('header')));
+  await alice.api.patch('publicProfiles/alice',{appearance:legacyAppearance});
   if(process.env.QA_BROWSER_PATH) {
     await env.withSecurityRulesDisabled(async context=>{
       const db=context.firestore();

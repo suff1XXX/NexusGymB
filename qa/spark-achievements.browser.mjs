@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 
 export async function checkSparkBrowser(owner) {
   const root=resolve('public'),server=createServer(async(req,res)=>{
-    const path=resolve(root,'.'+new URL(req.url,'http://localhost').pathname);
+    const pathname=new URL(req.url,'http://localhost').pathname;
+    const path=resolve(root,/^\/u\/[1-9][0-9]{0,11}\/?$/.test(pathname)?'profile.html':'.'+pathname);
     if(!path.startsWith(root+sep)){res.writeHead(403).end();return;}
     try {res.setHeader('Content-Type',({'.js':'text/javascript','.html':'text/html','.css':'text/css','.svg':'image/svg+xml'})[extname(path)]||'application/octet-stream');res.end(await readFile(path));}
     catch {res.writeHead(404).end();}
@@ -241,6 +242,47 @@ export async function checkSparkBrowser(owner) {
     await page.locator('.notice-item[data-id="old_0"]').waitFor();
     assert.equal(await page.locator('.notice-item').count(),countBefore);
     assert.equal(await page.locator('.notice-item.unread').count(),0);
+    await page.goto(origin+'/settings.html?section=appearance');
+    await page.locator('#profile-appearance-form').waitFor();
+    const appearanceForm=page.locator('#profile-appearance-form');
+    await appearanceForm.locator('[name="headerMode"]').selectOption('custom');
+    await appearanceForm.locator('[name="headerTitle"]').fill('Alice GymB');
+    await appearanceForm.locator('[name="headerBackground"]').fill('#162238');
+    await appearanceForm.locator('[name="headerAccent"]').fill('#a5d5ff');
+    await appearanceForm.locator('[name="headerSurface"]').selectOption('gradient');
+    await appearanceForm.locator('[name="headerShape"]').selectOption('pill');
+    assert.equal(await appearanceForm.locator('[data-header-preview] strong').innerText(),'Alice GymB');
+    await appearanceForm.locator('[data-header-preview]').screenshot({path:'.sites-runtime/profile-header-preview.png'});
+    assert.equal(await page.locator('#site-header .brand').innerText(),'Nexus GymB');
+    await appearanceForm.locator('button[type="submit"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-appearance-status]')?.textContent==='Збережений вигляд');
+    await page.reload();await page.locator('#profile-appearance-form').waitFor();
+    assert.equal(await appearanceForm.locator('[name="headerTitle"]').inputValue(),'Alice GymB');
+    await page.evaluate(()=>localStorage.setItem('qa-auth','bob'));
+    await page.goto(origin+'/profile.html?uid=alice');
+    await page.locator('#site-header[data-profile-header]').waitFor();
+    assert.equal(await page.locator('#site-header .brand').innerText(),'Alice GymB');
+    assert.equal(await page.locator('#site-header').getAttribute('data-header-shape'),'pill');
+    for(const width of [1280,760,390,320]) {
+      await page.setViewportSize({width,height:900});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`Custom profile header at ${width}`);
+      await page.evaluate(()=>scrollTo(0,0));
+      const headerClip=await page.locator('#site-header').boundingBox();
+      await page.screenshot({path:`.sites-runtime/profile-header-${width}.png`,clip:headerClip});
+    }
+    await page.reload();await page.locator('#site-header[data-profile-header]').waitFor();
+    await page.goto(origin+'/profile.html');await page.locator('.profile-hero h1').waitFor();
+    assert.equal(await page.locator('#site-header[data-profile-header]').count(),0);
+    assert.equal(await page.locator('#site-header .brand').innerText(),'Nexus GymB');
+    await page.goto(origin+'/home.html');await page.locator('.hero').waitFor();
+    assert.equal(await page.locator('#site-header[data-profile-header]').count(),0);
+    await page.evaluate(()=>localStorage.setItem('qa-auth','alice'));
+    await page.goto(origin+'/settings.html?section=appearance');await page.locator('#profile-appearance-form').waitFor();
+    await appearanceForm.locator('[name="headerMode"]').selectOption('default');
+    await appearanceForm.locator('button[type="submit"]').click();
+    await page.waitForFunction(()=>document.querySelector('[data-appearance-status]')?.textContent==='Збережений вигляд');
+    await page.goto(origin+'/profile.html');await page.locator('.profile-hero h1').waitFor();
+    assert.equal(await page.locator('#site-header[data-profile-header]').count(),0);
     await page.evaluate(()=>localStorage.setItem('qa-auth','signed-out'));
     await page.goto(origin+'/index.html');await page.locator('#auth-form').waitFor();await page.waitForFunction(()=>!document.querySelector('#auth-form button[type="submit"]').disabled);
     await page.setViewportSize({width:1280,height:900});await page.emulateMedia({reducedMotion:'no-preference'});

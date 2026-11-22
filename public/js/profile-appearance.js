@@ -5,9 +5,13 @@ export const appearanceDefaults = {
   avatarShape:'rounded', avatarRing:'none', coverSize:'normal', heroAlign:'left', layout:'right', density:'normal',
   pattern:'none', surface:'solid', coverStyle:'classic', avatarSize:'normal', nameStyle:'normal',
   imagePosition:'center', hoverEffect:'none', motion:'full',
+  headerMode:'default',headerBackground:'#ffffff',headerAccent:'#2563eb',headerSurface:'solid',headerShape:'rounded',headerTitle:'Nexus GymB',
 };
-export const appearanceColors = ['background','backgroundEnd','blocks','text','accent','buttonText'];
+export const appearanceColors = ['background','backgroundEnd','blocks','text','accent','buttonText','headerBackground','headerAccent'];
 export const appearanceChoices = {
+  headerMode:[['default','Стандартний'],['profile','Палітра профілю'],['custom','Власні кольори']],
+  headerSurface:[['solid','Суцільний'],['glass','Скло'],['gradient','М’який градієнт']],
+  headerShape:[['rounded','Заокруглений'],['pill','Капсула'],['square','Майже прямі кути']],
   mode:[['solid','Статичний колір'],['gradient','Градієнт'],['dynamic','Рухомий градієнт'],['image','Зображення']],
   buttonStyle:[['solid','Заливка'],['outline','Контур'],['soft','М’який фон']],
   buttonShape:[['rounded','Заокруглені'],['pill','Капсули'],['square','Майже прямі']],
@@ -46,10 +50,11 @@ export function profileAppearance(value = {}) {
   const data = {...appearanceDefaults,...value};
   if (!appearanceColors.every(key=>/^#[0-9a-fA-F]{6}$/.test(data[key])) ||
       !Object.entries(appearanceChoices).every(([key,choices])=>choices.some(([id])=>data[key] === id)) ||
+      typeof data.headerTitle!=='string' || !data.headerTitle.trim() || data.headerTitle.trim().length>32 || /[\u0000-\u001f\u007f]/.test(data.headerTitle) ||
       !Number.isInteger(data.angle) || data.angle < 0 || data.angle > 360 || typeof data.image !== 'string' ||
       data.image.length > 300000 || data.image && !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data.image))
     throw Error('Перевір кольори, параметри оформлення та фонове зображення.');
-  return Object.fromEntries(Object.keys(appearanceDefaults).map(key=>[key,data[key]]));
+  return Object.fromEntries(Object.keys(appearanceDefaults).map(key=>[key,key==='headerTitle'?data[key].trim():data[key]]));
 }
 const fonts = {system:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',rounded:'"Trebuchet MS","Segoe UI",sans-serif',serif:'Georgia,"Times New Roman",serif',mono:'ui-monospace,Consolas,monospace'};
 function appearanceVariables(value) {
@@ -92,7 +97,35 @@ export function readableText(color) {
   const luminance = .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
   return (luminance+.05)/.05 >= 1.05/(luminance+.05) ? '#101820' : '#ffffff';
 }
+export function profileHeaderAppearance(value) {
+  const a=profileAppearance(value);
+  if(a.headerMode==='default')return null;
+  const bg=a.headerMode==='profile'?a.blocks:a.headerBackground,accent=a.headerMode==='profile'?a.accent:a.headerAccent;
+  const fg=readableText(bg),linear=color=>color.slice(1).match(/../g).map(v=>parseInt(v,16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
+  const l1=linear(bg),l2=linear(accent),contrast=(Math.max(l1,l2)+.05)/(Math.min(l1,l2)+.05);
+  const ink=contrast>=4.5?accent:fg;
+  return {title:a.headerTitle,surface:a.headerSurface,shape:a.headerShape,variables:{
+    '--panel':bg,'--text':fg,'--blue':ink,'--muted':`color-mix(in srgb,${fg} 72%,${bg})`,
+    '--bg':`color-mix(in srgb,${fg} 5%,${bg})`,'--soft':`color-mix(in srgb,${fg} 9%,${bg})`,'--line':`color-mix(in srgb,${fg} 20%,${bg})`,
+    '--profile-header-background':a.headerSurface==='gradient'?`linear-gradient(115deg,${bg},color-mix(in srgb,${accent} 12%,${bg}))`:a.headerSurface==='glass'?`color-mix(in srgb,${bg} 96%,transparent)`:bg,
+    '--profile-header-radius':{rounded:'22px',pill:'36px',square:'7px'}[a.headerShape],
+  }};
+}
+export function applyProfileHeaderAppearance(value,doc=document) {
+  const header=doc.querySelector('#site-header');if(!header)return;
+  const keys=Object.keys(profileHeaderAppearance({...appearanceDefaults,headerMode:'custom'}).variables);
+  for(const key of keys)header.style.removeProperty(key);
+  delete header.dataset.profileHeader;delete header.dataset.headerSurface;delete header.dataset.headerShape;
+  const brand=header.querySelector('.header-inner>.brand');if(brand){brand.textContent='Nexus GymB';brand.setAttribute('aria-label','Nexus GymB — головна');}
+  if(doc.body.dataset.page!=='profile'||!value)return;
+  let appearance;try{appearance=profileHeaderAppearance(value);}catch{return;}
+  if(!appearance)return;
+  header.dataset.profileHeader='';header.dataset.headerSurface=appearance.surface;header.dataset.headerShape=appearance.shape;
+  for(const [key,value]of Object.entries(appearance.variables))header.style.setProperty(key,value);
+  if(brand){brand.textContent=appearance.title;brand.setAttribute('aria-label',`${appearance.title} — головна`);}
+}
 export function applyProfilePageAppearance(value, doc = document) {
+  applyProfileHeaderAppearance(value,doc);
   const main = doc.querySelector('main.main'), keys = Object.keys(appearanceVariables(appearanceDefaults));
   main?.classList.remove('profile-page-custom');
   if (main) for (const key of keys) main.style.removeProperty(key);
@@ -102,7 +135,8 @@ export function applyProfilePageAppearance(value, doc = document) {
   delete doc.body.dataset.background;
   delete doc.body.dataset.profileMotion;
   if (doc.body.dataset.page !== 'profile' || !value) return;
-  const a = profileAppearance(value), variables = appearanceVariables(a);
+  let a;try{a=profileAppearance(value);}catch{return;}
+  const variables = appearanceVariables(a);
   doc.body.style.setProperty('--profile-page-background',variables['--profile-background']);
   doc.body.dataset.background = a.mode;
   doc.body.dataset.profileMotion = a.motion;

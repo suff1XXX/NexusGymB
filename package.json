@@ -5,7 +5,7 @@
   "scripts": {
     "test": "node --test",
     "build:achievements": "node scripts/build-achievements.mjs",
-    "prepare:achievement-rules": "node scripts/update-spark-achievements.mjs && node scripts/update-training-experience-rules.mjs && node scripts/update-meeting-poll-rules.mjs && node scripts/update-exercise-notes-rules.mjs && node scripts/update-notification-history-rules.mjs",
+    "prepare:achievement-rules": "node scripts/update-spark-achievements.mjs && node scripts/update-training-experience-rules.mjs && node scripts/update-meeting-poll-rules.mjs && node scripts/update-exercise-notes-rules.mjs && node scripts/update-notification-history-rules.mjs && node scripts/update-profile-header-rules.mjs",
     "test:achievement-rules": "firebase emulators:exec --only firestore --project demo-nexus-gymb \"node qa/spark-achievements.rules.mjs\"",
     "test:optimization-browser": "node qa/optimization.browser.mjs",
     "prepare:appearance-rules": "node scripts/update-profile-appearance-rules.mjs",
