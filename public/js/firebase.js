@@ -142,7 +142,7 @@ async function initialize() {
     const result=await C.runTransaction(db,async tx=>{
       const showcaseRef=C.doc(db,`publicProfiles/${uid}/achievements/showcase`),scoreRef=C.doc(db,`achievementScores/${uid}`);
       const [progress,grants,settings,profile,account,activity,showcase,score]=await Promise.all([tx.get(progressRef),tx.get(grantsRef),tx.get(settingsRef),tx.get(C.doc(db,`publicProfiles/${uid}`)),tx.get(C.doc(db,`users/${uid}`)),tx.get(C.doc(db,`users/${uid}/achievementActivity/current`)),tx.get(showcaseRef),tx.get(scoreRef)]);
-      if(!account.exists()||!profile.exists())throw Error('Користувача не знайдено.');
+      if(!account.exists())throw Error('Користувача не знайдено.');
       let manualIds=grants.data()?.ids||[];
       if(award?.action==='list')return {earnedIds:progress.data()?.earnedIds||[],manualIds,score:progress.data()?.score||0};
       if(award) {
@@ -161,12 +161,12 @@ async function initialize() {
       if(progressChanged)tx.set(progressRef,{...next,updatedAt:C.serverTimestamp()});
       const displayChanged=display||savedDisplay&&JSON.stringify(nextDisplay)!==JSON.stringify(savedDisplay);
       if(displayChanged)tx.set(settingsRef,nextDisplay);
-      const publicProfile=profile.data();
-      if(JSON.stringify(showcase.data()?.selectedIds)!==JSON.stringify(nextDisplay.selectedIds))tx.set(showcaseRef,{selectedIds:nextDisplay.selectedIds,updatedAt:C.serverTimestamp()});
+      const publicProfile=profile.data()||account.data();
+      if(profile.exists()&&JSON.stringify(showcase.data()?.selectedIds)!==JSON.stringify(nextDisplay.selectedIds))tx.set(showcaseRef,{selectedIds:nextDisplay.selectedIds,updatedAt:C.serverTimestamp()});
       const scoreData={uid,name:publicProfile.name,photo:publicProfile.photo||'',customId:publicProfile.customId,score:next.score,medalCount:next.earnedIds.length};
-      if(nextDisplay.rankingEnabled&&Number.isInteger(publicProfile.customId)) {
+      if(nextDisplay.rankingEnabled&&profile.exists()&&Number.isInteger(publicProfile.customId)) {
         if(Object.entries(scoreData).some(([key,value])=>score.data()?.[key]!==value))tx.set(scoreRef,{...scoreData,updatedAt:C.serverTimestamp()});
-      } else if(score.exists())tx.delete(scoreRef);
+      } else if(!nextDisplay.rankingEnabled&&score.exists())tx.delete(scoreRef);
       return next;
     });
     achievementBoard=null;return result;

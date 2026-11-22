@@ -30,6 +30,10 @@ try {
     await C.setDoc(C.doc(admin,'publicProfiles/bob/comments/c'),{authorId:'alice',text:'Коментар',createdAt:1});
   });
   const alice=await client('alice'),bob=await client('bob'),ceo=await client(owner);
+  await env.withSecurityRulesDisabled(async context=>C.setDoc(C.doc(context.firestore(),'users/new-user'),{name:'Новий користувач',email:'new-user@example.test',customId:4,createdAt:1}));
+  assert.equal((await ceo.api.adminAchievementAwards('new-user','grant','ceo-praise')).score,300);
+  const newcomer=await client('new-user');
+  assert.equal((await newcomer.api.refreshAchievements()).score,300);
   let progress=await alice.api.refreshAchievements();
   assert.equal(progress.score,40);assert.equal(progress.facts.activeDays,1);assert.ok(progress.earnedIds.includes('first-comment'));
   assert.equal((await alice.api.refreshAchievements()).facts.activeDays,1);
