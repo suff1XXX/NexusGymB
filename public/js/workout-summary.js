@@ -1,4 +1,5 @@
 import { personalRecords } from './fitness.js';
+import {repetitionRecords} from './workout-additions.js';
 export function workoutSummary(session, sessions = []) {
   if (session?.status !== 'completed') throw Error('Підсумок доступний після завершення тренування.');
   const logs = session.logs || [], working = logs.filter((l)=>!l.warmup);
@@ -20,5 +21,9 @@ export function workoutSummary(session, sessions = []) {
     plannedExercises:session.items.length,
     plannedSets:session.executionMode === 'simple' ? 0 : session.items.reduce((sum,item)=>sum+item.sets,0),
     records,
+    repetitionRecords:[5,8,10,12].flatMap(reps=>{
+      const previous=new Map(repetitionRecords(earlier,reps,session.date).map(record=>[record.key,record]));
+      return repetitionRecords([session],reps,session.date).filter(record=>!previous.has(record.key)||record.weight>previous.get(record.key).weight).map(record=>({...record,first:!previous.has(record.key)}));
+    }),
   };
 }

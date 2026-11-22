@@ -2,7 +2,7 @@ import {achievementFacts} from './achievement-catalog.js';
 import {exerciseKey} from './training-data.js';
 import {workoutSummary} from './workout-summary.js';
 
-export const profileBlocks={medals:'Медалі',goals:'Ціль на тиждень',stats:'Статистика',challenges:'Виклики GymBro',records:'Особисті рекорди',progress:'Графік прогресу',measurements:'Заміри тіла',reflections:'Самопочуття',history:'Історія тренувань',comments:'Коментарі'};
+export const profileBlocks={medals:'Медалі',goals:'Цілі й календар',stats:'Статистика',challenges:'GymBro: виклики й час',records:'Особисті рекорди',progress:'Графік прогресу',measurements:'Заміри тіла',reflections:'Самопочуття',history:'Історія тренувань',comments:'Коментарі'};
 export const defaultBlockOrder=Object.keys(profileBlocks);
 export const privateProfileBlocks=['goals','challenges','progress','measurements','reflections','history'];
 export function profileLayout(value) {

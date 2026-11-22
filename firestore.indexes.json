@@ -4,6 +4,10 @@
     "queryScope": "COLLECTION",
     "fields": [{ "fieldPath": "members", "arrayConfig": "CONTAINS" }, { "fieldPath": "status", "order": "ASCENDING" }]
   }, {
+    "collectionGroup": "meetingPolls",
+    "queryScope": "COLLECTION",
+    "fields": [{"fieldPath":"members","arrayConfig":"CONTAINS"},{"fieldPath":"createdAt","order":"DESCENDING"}]
+  }, {
     "collectionGroup": "gymChallenges",
     "queryScope": "COLLECTION",
     "fields": [{"fieldPath":"members","arrayConfig":"CONTAINS"},{"fieldPath":"createdAt","order":"DESCENDING"}]

@@ -52,6 +52,7 @@ export function newSession(program, day) {
     executionMode: program.builderMode === 'simple' ? 'simple' : program.builderMode === 'cross' ? 'mixed' : 'advanced',
     simpleCompleted: [],
     programId: program.id,
+    scope:program.scope==='home'?'home':'main',
     dayId: day.weekday,
     name: day.name,
     description: day.description || "",
@@ -133,7 +134,7 @@ export function plannedSession(program, date, now = new Date()) {
       !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) ||
       localDate(parsed) !== date || date < localDate(now))
     throw Error("Обери сьогоднішню або майбутню дату та опиши тренування або додай вправи з допустимими параметрами.");
-  return { ...newSession({ id: "" }, program.days[0]), name: program.name,
+  return { ...newSession({ id:"",scope:program.scope }, program.days[0]), name: program.name,
     date, status: "planned", startedAt: 0 };
 }
 export function startPlannedSession(session) {

@@ -14,6 +14,7 @@ import { activityMillis } from './activity.js';
 import { achievementCatalog,achievementFacts } from './achievement-catalog.js';
 import {sparkProgress,sparkDisplay,sameSparkProgress} from './achievement-spark.js';
 import {challengeData,challengeCount,reflectionData,profileLayout,weekStart} from './training-experience.js';
+import {pollData} from './workout-additions.js';
 let api,
   registering = false, connecting;
 const authListeners = new Set();
@@ -221,6 +222,58 @@ async function initialize() {
     async saveNutritionGenerator(value) {
       requireOnline();
       await commit([{kind:'save',path:`users/${auth.currentUser.uid}/nutrition/generator`,data:value}]);
+    },
+    async meetingPolls() {
+      requireOnline();const uid=auth.currentUser.uid;
+      const docs=await C.getDocsFromServer(C.query(C.collection(db,'meetingPolls'),C.where('members','array-contains',uid),C.orderBy('createdAt','desc'),C.limit(50)));
+      return Promise.all(docs.docs.map(async doc=>{
+        const poll={...doc.data(),id:doc.id},partner=poll.members.find(member=>member!==uid);
+        poll.partnerName=(await api.publicIdentity(partner).catch(()=>null))?.name||'GymBro';poll.votes={};
+        await Promise.all(poll.members.map(async member=>{const vote=await readSpark(`meetingPolls/${poll.id}/votes/${member}`);if(vote)poll.votes[member]=vote;}));return poll;
+      }));
+    },
+    async createMeetingPoll(partnerId,value) {
+      requireOnline();const uid=auth.currentUser.uid,data=pollData(value);
+      if(!partnerId||partnerId===uid)throw Error('Обери GymBro.');
+      const ref=C.doc(C.collection(db,'meetingPolls')),options=data.options;
+      const batch=C.writeBatch(db);
+      batch.set(ref,{title:data.title,options,creatorId:uid,partnerId,members:[uid,partnerId],status:'open',createdAt:C.serverTimestamp()});
+      batch.set(C.doc(db,`meetingPolls/${ref.id}/votes/${uid}`),{choices:options.map((_,index)=>index),updatedAt:C.serverTimestamp()});
+      await batch.commit();return ref.id;
+    },
+    async voteMeetingPoll(id,choices) {
+      requireOnline();const poll=await readSpark(`meetingPolls/${id}`);
+      if(!poll||poll.status!=='open')throw Error('Голосування вже завершено. Онови список.');
+      if(!Array.isArray(choices)||new Set(choices).size!==choices.length||choices.some(index=>!Number.isInteger(index)||index<0||index>=poll.options.length))throw Error('Перевір обрані варіанти.');
+      await C.setDoc(C.doc(db,`meetingPolls/${id}/votes/${auth.currentUser.uid}`),{choices:[...choices].sort((a,b)=>a-b),updatedAt:C.serverTimestamp()});
+    },
+    async closeMeetingPoll(id,index) {
+      requireOnline();const uid=auth.currentUser.uid,ref=C.doc(db,`meetingPolls/${id}`);
+      await C.runTransaction(db,async tx=>{
+        const poll=(await tx.get(ref)).data();
+        if(!poll||poll.creatorId!==uid||poll.status!=='open'||!Number.isInteger(index)||index<0||index>=poll.options.length)throw Error('Не можна обрати цей час.');
+        const votes=await Promise.all(poll.members.map(member=>tx.get(C.doc(db,`meetingPolls/${id}/votes/${member}`))));
+        if(votes.some(vote=>!vote.exists())||!votes.some(vote=>vote.data().choices.includes(index)))throw Error('Дочекайся відповідей обох і обери варіант, який комусь підходить.');
+        const clock=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date()).replace(' ','T');
+        if(poll.options[index].date+'T'+poll.options[index].time<clock)throw Error('Цей час уже минув. Створи нове опитування.');
+        tx.update(ref,{status:'closed',selectedIndex:index,closedAt:C.serverTimestamp()});
+      });
+    },
+    async cancelMeetingPoll(id) {
+      requireOnline();await C.updateDoc(C.doc(db,`meetingPolls/${id}`),{status:'cancelled',cancelledAt:C.serverTimestamp()});
+    },
+    async sendPollInvite(id,data) {
+      requireOnline();const poll=await readSpark(`meetingPolls/${id}`);
+      if(!poll||poll.creatorId!==auth.currentUser.uid||poll.status!=='closed')throw Error('Спочатку обери підсумковий час.');
+      if(poll.invitationId)return poll.invitationId;
+      const chosen=poll.options[poll.selectedIndex];
+      if(data.date!==chosen.date||data.time!==chosen.time)throw Error('Дата й час мають відповідати результату опитування.');
+      const clock=new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Kyiv',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date()).replace(' ','T');
+      if(chosen.date+'T'+chosen.time<clock)throw Error('Обраний час уже минув. Створи нове опитування.');
+      const invitationId=await api.sendTrainingInvite(poll.partnerId,data,`poll_${id}`);
+      try {await C.updateDoc(C.doc(db,`meetingPolls/${id}`),{invitationId});}
+      catch(error) {if((await readSpark(`meetingPolls/${id}`))?.invitationId!==invitationId)throw error;}
+      return invitationId;
     },
     async weeklyGoals() {
       requireOnline();return (await C.getDocsFromServer(C.query(C.collection(db,`users/${auth.currentUser.uid}/weeklyGoals`),C.orderBy('week','desc'),C.limit(12)))).docs.map(doc=>({...doc.data(),id:doc.id}));
@@ -724,13 +777,23 @@ async function initialize() {
       requireOnline();
       await commit([{ kind: 'patch', path: `reports/${id}`, data: { status, reviewedAt: C.serverTimestamp() } }]);
     },
-    async sendTrainingInvite(to, data) {
+    async sendTrainingInvite(to, data, requestId='') {
       requireOnline();
-      const from = auth.currentUser.uid, id = crypto.randomUUID();
+      const from = auth.currentUser.uid, id = requestId||crypto.randomUUID();
+      const alreadySent=async()=>{
+        if(!requestId)return false;
+        const previous=await readSpark(`trainingInvites/${id}`).catch(error=>{if(error.code==='permission-denied')return null;throw error;});
+        if(!previous)return false;
+        if(previous.from!==from||previous.to!==to||previous.date!==data.date||previous.time!==data.time)throw Error('Запрошення з таким ID вже існує.');
+        return true;
+      };
+      if(await alreadySent())return id;
       const invite = { ...data, from, to, members: [from, to], status: 'pending', createdAt: C.serverTimestamp() };
       const session = inviteSession(invite, id, from), { id: sessionId, ...stored } = session;
+      try {
       await commit([{ kind: 'save', path: `trainingInvites/${id}`, data: invite },
         { kind: 'save', path: `users/${from}/sessions/${sessionId}`, data: stored }, notice(to, 'training_invite', id, from)]);
+      } catch(error) {if(!await alreadySent())throw error;}
       return id;
     },
     async trainingInvites() {

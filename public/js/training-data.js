@@ -29,7 +29,7 @@ export function repeatProgram(session) {
     });
     return item;
   });
-  return { name: session.name, type: "Власна програма",
+  return { name: session.name, type: "Власна програма",scope:session.scope==='home'?'home':'main',
     builderMode: session.executionMode === "simple" ? "simple" : session.executionMode === "mixed" ? "cross" : "advanced",
     days: [{ weekday: 0, name: "Тренування", groups: "", description: session.description || "", warmup: session.warmup || "", items }] };
 }
@@ -54,8 +54,8 @@ export function calendarEvents(program, sessions, date) {
   const day = program?.scheduleMode !== "sequence" && program?.scope !== "home"
     ? program?.days.find((d) => d.weekday === weekday(new Date(`${date}T12:00:00`))) : undefined;
   return [
-    ...(day ? [{ kind: "program", name: day.name, programId: program.id, weekday: day.weekday }] : []),
-    ...sessions.filter((s) => s.date === date).map((s) => ({ kind: s.status, name: s.name, id: s.id })),
+    ...(day ? [{ kind: "program", name: day.name, programId: program.id, weekday: day.weekday,scope:'main' }] : []),
+    ...sessions.filter((s) => s.date === date).map((s) => ({ kind: s.status, name: s.name, id: s.id,scope:s.scope,programId:s.programId })),
   ];
 }
 

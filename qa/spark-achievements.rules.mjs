@@ -4,6 +4,8 @@ import * as C from 'firebase/firestore';
 import assert from 'node:assert/strict';
 import {weekStart,shiftDate,defaultBlockOrder} from '../public/js/training-experience.js';
 import {achievementCatalog} from '../public/js/achievement-catalog.js';
+import {invitePlan} from '../public/js/training-invites.js';
+import {newSession} from '../public/js/model.js';
 
 const owner='ljYr2MF28zg1zAFsD7M1sNH6s8O2';
 const env=await initializeTestEnvironment({projectId:'demo-nexus-gymb',firestore:{rules:readFileSync('firestore.rules','utf8')}});
@@ -125,11 +127,42 @@ try {
   const allMedals=await client('all-medals');
   assert.equal((await allMedals.api.refreshAchievements()).earnedIds.length,achievementCatalog.length);
   assert.equal((await C.getDocs(C.collection(allMedals.db,'users/all-medals/achievementEvents'))).size,achievementCatalog.length);
+  const pollOptions=Array.from({length:6},(_,index)=>({date:shiftDate(today,index+1),time:'18:00'}));
+  const pollId=await alice.api.createMeetingPoll('bob',{title:'Коли йдемо в зал?',options:pollOptions});
+  assert.equal((await get(alice.db,`meetingPolls/${pollId}/votes/alice`)).choices.length,6);
+  await assert.rejects(alice.api.closeMeetingPoll(pollId,0));
+  await assertFails(C.getDoc(C.doc(ceo.db,`meetingPolls/${pollId}`)));
+  await assertFails(C.setDoc(C.doc(bob.db,`meetingPolls/${pollId}/votes/alice`),{choices:[0],updatedAt:C.serverTimestamp()}));
+  await assertFails(C.setDoc(C.doc(bob.db,`meetingPolls/${pollId}/votes/bob`),{choices:[99],updatedAt:C.serverTimestamp()}));
+  await bob.api.voteMeetingPoll(pollId,[1,2]);
+  await assert.rejects(bob.api.closeMeetingPoll(pollId,1));
+  await alice.api.closeMeetingPoll(pollId,1);
+  assert.equal((await get(bob.db,`meetingPolls/${pollId}`)).selectedIndex,1);
+  await assert.rejects(bob.api.voteMeetingPoll(pollId,[0]));
+  await assertFails(C.updateDoc(C.doc(alice.db,`meetingPolls/${pollId}`),{title:'Підміна часу'}));
+  const inviteProgram={id:'replacement-source',name:'Основна програма',type:'Власна програма',scope:'main',builderMode:'advanced',days:[{weekday:0,name:'Жим',groups:'Груди',items:[{exerciseId:'press',name:'Жим штанги',primary:'Груди',sets:3,reps:'8',weight:50,seconds:0,rest:60,metrics:[]}]}]};
+  const plan=invitePlan(inviteProgram,0,pollOptions[1].date,pollOptions[1].time);
+  const sent=await Promise.all([alice.api.sendPollInvite(pollId,plan),alice.api.sendPollInvite(pollId,plan)]);
+  assert.equal(sent[0],sent[1]);assert.equal(sent[0],`poll_${pollId}`);
+  assert.equal((await get(alice.db,`users/alice/sessions/invite_${sent[0]}`)).status,'planned');
+  assert.equal(await get(bob.db,`users/bob/sessions/invite_${sent[0]}`),undefined);
+  await bob.api.respondTrainingInvite(sent[0],'accepted');
+  assert.equal((await get(bob.db,`users/bob/sessions/invite_${sent[0]}`)).status,'planned');
+  assert.equal(await alice.api.sendPollInvite(pollId,plan),sent[0]);
+  const declinedPoll=await bob.api.createMeetingPoll('alice',{title:'Інший час',options:pollOptions.slice(0,2)});
+  await alice.api.voteMeetingPoll(declinedPoll,[]);await bob.api.voteMeetingPoll(declinedPoll,[]);
+  await assert.rejects(bob.api.closeMeetingPoll(declinedPoll,0));await bob.api.cancelMeetingPoll(declinedPoll);
   if(process.env.QA_BROWSER_PATH) {
     await env.withSecurityRulesDisabled(async context=>{
       const db=context.firestore();
       await C.updateDoc(C.doc(db,'publicProfiles/alice'),{visibility:{records:true}});
       await C.setDoc(C.doc(db,'publicProfiles/alice/stats/records'),{items:[{key:'squat',name:'Присідання',weight:65,reps:12,date:today}]});
+      await C.setDoc(C.doc(db,'users/alice/programs/replacement-source'),inviteProgram);
+      await C.setDoc(C.doc(db,'users/alice/programs/home-source'),{...inviteProgram,id:'home-source',name:'Домашній комплекс',scope:'home'});
+      await C.setDoc(C.doc(db,'users/alice/sessions/today-only'),{...newSession(inviteProgram,inviteProgram.days[0]),id:'today-only'});
+      await C.setDoc(C.doc(db,'users/alice/sessions/home-history'),{...workout,name:'Домашній комплекс',scope:'home',programId:'home-source',date:today});
+      await C.setDoc(C.doc(db,'users/alice/sessions/main-history'),{...workout,name:'Основна програма',scope:'main',programId:'replacement-source',date:today});
+      await C.setDoc(C.doc(db,'exercises/alternate-press'),{name:'Жим у тренажері',primary:'Груди',equipment:'Тренажер'});
     });
     await (await import('./spark-achievements.browser.mjs')).checkSparkBrowser(owner);
   }
