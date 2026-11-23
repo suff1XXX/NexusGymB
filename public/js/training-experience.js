@@ -1,10 +1,12 @@
+import { totalWeight } from './weight-details.js';
+import { isWorkingSet } from './training-methods.js';
 import {achievementFacts} from './achievement-catalog.js';
 import {exerciseKey} from './training-data.js';
 import {workoutSummary} from './workout-summary.js';
 
 export const profileBlocks={medals:'Медалі',goals:'Цілі й календар',stats:'Статистика',challenges:'GymBro: виклики й час',records:'Особисті рекорди',progress:'Графік прогресу',measurements:'Заміри тіла',reflections:'Самопочуття',history:'Історія тренувань',comments:'Коментарі'};
 export const defaultBlockOrder=Object.keys(profileBlocks);
-export const privateProfileBlocks=['goals','challenges','progress','measurements','reflections','history'];
+export const privateProfileBlocks=['challenges','progress','measurements','reflections','history'];
 export function profileLayout(value) {
   const order=value?.order||defaultBlockOrder,visible=value?.visible||defaultBlockOrder;
   if(!Array.isArray(order)||order.length!==defaultBlockOrder.length||new Set(order).size!==order.length||order.some(key=>!Object.hasOwn(profileBlocks,key))||!Array.isArray(visible)||new Set(visible).size!==visible.length||visible.some(key=>!Object.hasOwn(profileBlocks,key)))throw Error('Перевір блоки профілю.');
@@ -30,9 +32,9 @@ function exerciseTotals(session) {
     const logs=(session.logs||[]).filter(log=>log.index===index&&!log.warmup&&!log.quickResult);
     if(!logs.length)return;
     const known=logs.filter(log=>!log.weightUnknown),key=exerciseKey(item),previous=rows.get(key)||{key,name:item.name,sets:0,reps:0,volume:0,bestWeight:null};
-    previous.sets+=logs.length;previous.reps+=logs.reduce((sum,log)=>sum+Number(log.reps||0),0);previous.volume+=known.reduce((sum,log)=>sum+log.weight*log.reps,0);
+    previous.sets+=logs.filter(isWorkingSet).length;previous.reps+=logs.reduce((sum,log)=>sum+Number(log.reps||0),0);previous.volume+=known.reduce((sum,log)=>sum+totalWeight(log)*log.reps,0);
     previous.unknownWeights=!!previous.unknownWeights||logs.some(log=>log.weightUnknown);
-    if(known.length)previous.bestWeight=Math.max(previous.bestWeight??0,...known.map(log=>log.weight));
+    if(known.length)previous.bestWeight=Math.max(previous.bestWeight??0,...known.map(log=>totalWeight(log)));
     rows.set(key,previous);
   });
   return rows;

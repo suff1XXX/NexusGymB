@@ -1,8 +1,11 @@
+import { profileLabel } from './training-profiles.js';
+import { isWorkingSet } from './training-methods.js';
+import { repsLabel } from './repetitions.js';
 import {workoutSummary} from './workout-summary.js';
 import {weightLabel} from './workout-modes.js';
 
 const number=value=>Number(value).toLocaleString('uk-UA',{maximumFractionDigits:2});
-export function resultCardData(session,sessions=[]) {
+export function resultCardData(session,sessions=[],profiles=[]) {
   const stats=workoutSummary(session,sessions);
   return {name:session.name||'Тренування',date:session.date,early:!!session.endedEarly,stats,
     exercises:session.items.flatMap((item,index)=>{
@@ -10,17 +13,17 @@ export function resultCardData(session,sessions=[]) {
       if(!logs.length&&!session.simpleCompleted?.includes(index))return [];
       const groups=new Map();
       for(const log of logs) {
-        const label=`${log.quickResult?'Найкращий: ':''}${weightLabel(log)}${log.seconds?` · ${log.seconds} с`:` × ${log.reps}`}`;
+        const label=`${profileLabel(log.machine,profiles)} · ${log.dropOf !== undefined ? `Дроп до підходу ${session.logs.slice(0,log.dropOf+1).filter(entry=>entry.index === index && isWorkingSet(entry)).length}: ` : log.quickResult?'Найкращий: ':''}${weightLabel(log)}${log.seconds?` · ${log.seconds} с`:` × ${repsLabel(log)}`}`;
         groups.set(label,(groups.get(label)||0)+1);
       }
-      return [{name:item.name||'Вправа',results:[...groups].map(([label,count])=>`${count>1?`${count} підх. · `:''}${label}`).join(' / ')||'Виконано без обліку підходів'}];
+      return [{name:(item.name||'Вправа')+(item.superset?' · суперсет':''),results:[...groups].map(([label,count])=>`${count>1?`${count} підх. · `:''}${label}`).join(' / ')||'Виконано без обліку підходів'}];
     })};
 }
 
 // Both exports use the same local canvas, preserving Ukrainian glyphs without external fonts.
-export async function renderResultCard(session,sessions=[]) {
+export async function renderResultCard(session,sessions=[],profiles=[]) {
   await document.fonts.ready;
-  const data=resultCardData(session,sessions),pages=[];
+  const data=resultCardData(session,sessions,profiles),pages=[];
   let canvas,ctx,y;
   const font=(size,bold=false)=>{ctx.font=`${bold?700:400} ${size}px system-ui, sans-serif`;};
   const wrapped=(text,size,width=860)=>{
@@ -64,8 +67,8 @@ export async function renderResultCard(session,sessions=[]) {
   const records=[...s.records.map(r=>({...r,label:r.first?'Перший результат':'Новий рекорд'})),
     ...s.repetitionRecords.filter(r=>!s.records.some(p=>p.key===r.key&&p.weight===r.weight&&p.reps===r.reps)).map(r=>({...r,label:r.first?'Перший результат за повтореннями':'Рекорд за повтореннями'}))];
   if(records.length){ensure(130);text('ОСОБИСТІ РЕЗУЛЬТАТИ',18,true,'#3659e3');y+=8;}
-  for(const r of records){ensure(110);block(r.name,`${r.label} · ${r.weight} кг × ${r.reps}`,true);}
-  ensure(85);text('Розминка та найкращі результати не входять в обсяг.',17,false,'#62718a');
+  for(const r of records){ensure(110);block(r.name,`${r.label} · ${weightLabel(r)} × ${repsLabel(r)}`,true);}
+  ensure(85);text(`Дропів: ${s.dropSets} · обсяг діапазонів — за нижньою межею.`,17,false,'#62718a');
   for(const [index,p] of pages.entries()) {
     const c=p.getContext('2d');c.font='17px system-ui, sans-serif';c.fillStyle='#62718a';
     c.fillText('GymB · Результати тренування',70,1348);c.textAlign='right';c.fillText(`${index+1} / ${pages.length}`,930,1348);

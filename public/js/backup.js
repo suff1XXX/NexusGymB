@@ -1,3 +1,4 @@
+import { trainingProfiles, validProfileId } from './training-profiles.js';
 import { validProgram, copy } from "./model.js";
 import { exerciseData } from "./import.js";
 import { performanceData } from "./performance.js";
@@ -45,14 +46,23 @@ export function parseBackup(text) {
     const value=manualSetData(record,new Date(`${record.date}T23:59:59`));
     return {id:record.id,...value,createdAt:Number(record.createdAt)||0,updatedAt:Number(record.updatedAt)||Number(record.createdAt)||0};
   });
-  return { programs, sessions, exercises, preferences, measurements, manualSets };
+  const rawProfiles=data.trainingProfiles ?? [];
+  if (!Array.isArray(rawProfiles) || !unique(rawProfiles)) throw Error('Некоректні профілі тренувань у резервній копії.');
+  const profiles=rawProfiles.length?trainingProfiles(rawProfiles):[];
+  const selection=data.trainingProfileSettings?.activeId;
+  if (selection !== undefined && (!validProfileId(selection) || selection !== 'profile-1' && !profiles.some(profile=>profile.id === selection))) throw Error('Некоректний вибраний профіль тренувань.');
+  return { programs, sessions, exercises, preferences, measurements, manualSets, trainingProfiles:profiles,
+    trainingProfileSettings:selection?[{id:'selection',activeId:selection,updatedAt:Date.now()}]:[] };
+
 }
 
 export function backupEntries(backup, state, uid) {
   const entries = [], skipped = [];
   const current = { programs: state.programs, sessions: state.sessions, exercises: state.exercises.filter((e) => e.personal).map((e) => ({ id: e.id.slice(9) })),
-    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })), measurements: state.measurements || [], manualSets:state.manualSets||[] };
+    preferences: Object.keys(state.exercisePreferences).map((id) => ({ id })), measurements: state.measurements || [], manualSets:state.manualSets||[],trainingProfiles:(state.trainingProfiles || []).filter(profile=>!state.trainingProfilesStoredIds || state.trainingProfilesStoredIds.includes(profile.id)),trainingProfileSettings:[] };
   for (const [collection, list] of Object.entries(backup)) for (const record of list) {
+    const profileId=collection === 'trainingProfiles'?record.id:collection === 'trainingProfileSettings'?record.activeId:null;
+    if (profileId && Number(profileId.slice(-1)) > (state.trainingProfileLimit || 3)) {skipped.push(record);continue;}
     if (current[collection].some((r) => r.id === record.id) || collection === 'sessions' && record.status === 'active' && state.sessions.some((s) => s.status === 'active')) {
       skipped.push(record); continue;
     }

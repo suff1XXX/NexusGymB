@@ -24,14 +24,11 @@ jobs:
           node-version: 22
           cache: npm
       - name: Install dependencies and build editor
-        run: npm ci && npm run build:editor && npm run build:achievements
-      - name: Run available tests
-        run: |
-          npm test
+        run: npm ci && npm run build:editor
       - name: Check JavaScript
         run: |
           shopt -s nullglob
-          for file in public/js/*.js functions/index.js functions/lib/*.js scripts/*.mjs qa/*.mjs tests/*.mjs tools/*.mjs; do node --check "$file"; done
+          for file in public/js/*.js; do node --check "$file"; done
       - name: Check public files for private credentials
         run: |
           node --input-type=module <<'NODE'

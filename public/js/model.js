@@ -1,3 +1,6 @@
+import { weightDetails, validWeightDetails } from './weight-details.js';
+import { isWorkingSet, validSupersets, continueSuperset } from './training-methods.js';
+import { parseReps, machineName } from './repetitions.js';
 export const days = ["Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця", "Субота", "Неділя"];
 export const dayCodes = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
 
@@ -49,7 +52,7 @@ export function nextSequenceDay(program, sessions) {
 }
 export function newSession(program, day) {
   return {
-    executionMode: program.builderMode === 'simple' ? 'simple' : program.builderMode === 'cross' ? 'mixed' : 'advanced',
+    executionMode: program.builderMode === 'simple' ? (day.items.some(item=>item.superset) ? 'mixed' : 'simple') : program.builderMode === 'cross' ? 'mixed' : 'advanced',
     simpleCompleted: [],
     programId: program.id,
     scope:program.scope==='home'?'home':'main',
@@ -94,14 +97,14 @@ export function hasWorkoutContent(day) {
   return !!(day?.items?.length || (typeof day?.description === "string" && day.description.trim()));
 }
 export function setPlan(item, index) {
-  return { reps: item.reps, weight: item.weight, seconds: item.seconds, rest: item.rest,
+  return { ...weightDetails(item), reps: item.reps, weight: item.weight, seconds: item.seconds, rest: item.rest,
     ...(item.setPlans?.[index] || {}) };
 }
 export function validSetPlans(item) {
   return item.setPlans === undefined || (Array.isArray(item.setPlans) &&
     item.setPlans.length === item.sets && item.setPlans.every((s) => s &&
       typeof s.reps === "string" && s.reps.length <= 20 &&
-      bounded(s.weight, 1000) && bounded(s.seconds, 7200) && bounded(s.rest, 600)));
+      bounded(s.weight, 1000) && bounded(s.seconds, 7200) && bounded(s.rest, 600) && validWeightDetails(s)));
 }
 export function pastSession(program, date, minutes = 0, now = new Date()) {
   const day = program?.days?.[0];
@@ -120,10 +123,8 @@ export function pastSession(program, date, minutes = 0, now = new Date()) {
   s.startedAt = s.endedAt - minutes * 60000;
   s.index = day.items.length;
   s.logs = day.items.flatMap((item, index) => Array.from({ length: item.sets }, (_, k) => {
-    const plan = setPlan(item, k), reps = Number(plan.reps || 0);
-    if (!Number.isInteger(reps) || !bounded(reps, 1000))
-      throw Error("Для минулого тренування вкажи точну кількість повторень у кожному підході.");
-    return { index, reps, weight: plan.weight, seconds: plan.seconds,
+    const plan = setPlan(item, k), repetitions = parseReps(plan.reps || 0);
+    return { index, ...repetitions, ...weightDetails(plan), machine: machineName(item.machine || ''), weight: plan.weight, seconds: plan.seconds,
       metrics: copy(item.metrics || []), at: s.endedAt };
   }));
   return s;
@@ -177,11 +178,13 @@ export function validProgram(p) {
         (d.warmup === undefined || (typeof d.warmup === "string" && d.warmup.length <= 2000)) &&
         Array.isArray(d.items) &&
         d.items.length <= 30 &&
+        validSupersets(d.items) &&
         d.items.every(
           (i) =>
             !!i && typeof i.name === "string" &&
             i.name.trim() &&
             i.name.length <= 100 &&
+            (i.machine === undefined || typeof i.machine === "string" && i.machine.length <= 80) &&
             Number.isInteger(i.sets) &&
             i.sets >= 1 &&
             i.sets <= 20 &&
@@ -190,7 +193,7 @@ export function validProgram(p) {
             bounded(i.rest, 600) &&
             bounded(i.seconds, 7200) &&
             bounded(i.weight, 1000) &&
-            validSetPlans(i) &&
+            validSetPlans(i) && validWeightDetails(i) &&
             (i.builderFeatures === undefined || (Array.isArray(i.builderFeatures) &&
               i.builderFeatures.length <= 8 && i.builderFeatures.every((key) =>
                 ["sets", "reps", "seconds", "weight", "rest", "note", "plans", "metrics"].includes(key)))) &&
@@ -201,15 +204,15 @@ export function validProgram(p) {
   );
 }
 export function workingSetCount(session, index = session.index) {
-  return session.logs.filter((l) => l.index === index && !l.warmup && !l.quickResult).length;
+  return session.logs.filter((l) => l.index === index && isWorkingSet(l)).length;
 }
-export function completeSet(session, reps, weight, metrics = [], warmup = false) {
+export function completeSet(session, reps, weight, metrics = [], warmup = false, details = null) {
   const s = copy(session),
     item = s.items[s.index];
   if (s.status !== "active" || !item) throw Error("Вправу не знайдено");
+  const repetitions = parseReps(reps), loadDetails=weightDetails(details || setPlan(item, Math.min(workingSetCount(s),item.sets-1)));
+  Object.assign(item,loadDetails);
   if (
-    !Number.isInteger(reps) ||
-    !bounded(reps, 1000) ||
     !bounded(weight, 1000) ||
     !validMetrics(metrics) || typeof warmup !== "boolean"
   )
@@ -225,16 +228,23 @@ export function completeSet(session, reps, weight, metrics = [], warmup = false)
   if (warmup && s.logs.filter((l) => l.index === s.index && l.warmup).length >= 20)
     throw Error("Можна записати до 20 розминочних підходів на вправу.");
   const plan = setPlan(item, Math.min(workingSetCount(s), item.sets - 1));
-  s.logs.push({ index: s.index, reps, weight, seconds: plan.seconds, metrics: copy(metrics), at: Date.now() });
+  s.logs.push({ index: s.index, ...repetitions, ...loadDetails, machine: machineName(item.machine || ''), weight, seconds: plan.seconds, metrics: copy(metrics), at: Date.now() });
   if (warmup) s.logs.at(-1).warmup = true;
   s.timerEnd = 0;
   s.restEnd = Date.now() + plan.rest * 1000;
+  if (!warmup) continueSuperset(s,s.index);
   return s;
 }
 export function advance(session, skip = false) {
   const s = copy(session);
   if (skip && !s.skipped.includes(s.index)) s.skipped.push(s.index);
-  s.index++;
+  if (s.items[s.index]?.superset) {
+    const pending=s.items.findIndex((item,index)=>!s.skipped.includes(index) && !s.simpleCompleted?.includes(index) && workingSetCount(s,index) < item.sets);
+    s.index=pending < 0 ? s.items.length : pending;
+  } else {
+    s.index++;
+    while (s.index < s.items.length && (s.skipped.includes(s.index) || s.simpleCompleted?.includes(s.index) || workingSetCount(s,s.index) >= s.items[s.index].sets)) s.index++;
+  }
   s.restEnd = 0;
   s.timerEnd = 0;
   if (s.index >= s.items.length) {

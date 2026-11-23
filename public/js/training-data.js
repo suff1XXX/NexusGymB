@@ -1,3 +1,7 @@
+import { totalWeight, sameWeightDetails, weightDetails, weightDetailsLabel } from './weight-details.js';
+import { profileLabel } from './training-profiles.js';
+import { isWorkingSet } from './training-methods.js';
+import { repsLabel, sameMachine } from './repetitions.js';
 import { copy, localDate, weekday, setPlan, plannedSession, hasWorkoutContent } from "./model.js";
 
 export function exerciseKey(item) {
@@ -12,7 +16,7 @@ export function previousResults(sessions, item, currentId, includeLog = () => tr
     if (previous && (session.date < previous.session.date ||
         session.date === previous.session.date && (session.endedAt || 0) <= (previous.session.endedAt || 0))) continue;
     const indexes = new Set(session.items.flatMap((entry, index) => exerciseKey(entry) === key ? [index] : []));
-    const logs = (session.logs || []).filter(log => indexes.has(log.index) && includeLog(log));
+    const logs = (session.logs || []).filter(log => indexes.has(log.index) && sameMachine(log, item.machine || '') && sameWeightDetails(log,item) && includeLog(log));
     if (logs.length) previous = { session, logs };
   }
   return previous;
@@ -22,10 +26,10 @@ export function repeatProgram(session) {
   if (session?.status !== "completed" || !hasWorkoutContent(session))
     throw Error("Завершене тренування не знайдено.");
   const items = copy(session.items).map((item, index) => {
-    const logs = session.logs.filter((l) => l.index === index && !l.warmup && !l.quickResult && !l.weightUnknown);
+    const logs = session.logs.filter((l) => l.index === index && isWorkingSet(l) && !l.weightUnknown);
     if (logs.length) item.setPlans = Array.from({ length: item.sets }, (_, k) => {
       const plan = setPlan(item, k), log = logs[k];
-      return log ? { ...plan, reps: String(log.reps), weight: log.weight, seconds: log.seconds ?? plan.seconds } : plan;
+      return log ? { ...plan, ...weightDetails(log), reps: repsLabel(log), weight: log.weight, seconds: log.seconds ?? plan.seconds } : plan;
     });
     return item;
   });
@@ -59,7 +63,7 @@ export function calendarEvents(program, sessions, date) {
   ];
 }
 
-export function progressSeries(sessions, { metric = "weight", key = "", since = "" } = {}) {
+export function progressSeries(sessions, { metric = "weight", key = "", since = "", machine = null } = {}) {
   const byDate = new Map();
   for (const s of sessions) {
     if (s.status !== "completed" || s.date < since) continue;
@@ -69,14 +73,14 @@ export function progressSeries(sessions, { metric = "weight", key = "", since = 
       continue;
     }
     if (metric === "performed") {
-      const indexes = new Set([...(s.simpleCompleted || []), ...s.logs.filter(l => !l.warmup).map(l => l.index)]);
+      const indexes = new Set([...(s.simpleCompleted || []).filter(index => machine === null || sameMachine(s.items[index] || {}, machine)), ...s.logs.filter(l => !l.warmup && (machine === null || sameMachine(l, machine))).map(l => l.index)]);
       const value = Number([...indexes].some(index => s.items[index] && (!key || exerciseKey(s.items[index]) === key)));
       if (value) byDate.set(s.date, (byDate.get(s.date) || 0) + value);
       continue;
     }
-    const logs = s.logs.filter((l) => !l.warmup && !l.weightUnknown && (metric !== 'volume' || !l.quickResult) && s.items[l.index] && (!key || exerciseKey(s.items[l.index]) === key));
+    const logs = s.logs.filter((l) => !l.warmup && !l.weightUnknown && (machine === null || sameMachine(l, machine)) && (metric !== 'volume' || !l.quickResult) && s.items[l.index] && (!key || exerciseKey(s.items[l.index]) === key));
     if (!logs.length) continue;
-    const value = metric === "volume" ? logs.reduce((sum, l) => sum + l.weight * l.reps, 0) : Math.max(...logs.map((l) => l.weight));
+    const value = metric === "volume" ? logs.reduce((sum, l) => sum + totalWeight(l) * l.reps, 0) : Math.max(...logs.map((l) => totalWeight(l)));
     byDate.set(s.date, metric === "weight" ? Math.max(byDate.get(s.date) || 0, value) : (byDate.get(s.date) || 0) + value);
   }
   const sorted = [...byDate].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
@@ -95,19 +99,19 @@ export function progressSeries(sessions, { metric = "weight", key = "", since = 
 export function exportData(state, now = new Date()) {
   return { version: 1, exportedAt: now.toISOString(), programs: copy(state.programs),
     sessions: copy(state.sessions), exercises: copy(state.exercises.filter((e) => e.personal)),
-    exercisePreferences: copy(state.exercisePreferences), measurements: copy(state.measurements || []), manualSets: copy(state.manualSets || []) };
+    exercisePreferences: copy(state.exercisePreferences), measurements: copy(state.measurements || []), manualSets: copy(state.manualSets || []), trainingProfiles:copy(state.trainingProfiles || []), trainingProfileSettings:{activeId:state.activeTrainingProfileId || 'profile-1'} };
 }
 
 export function exportCsv(state) {
   const rows = [["Тип", "Програма / тренування", "Дата / день", "Статус", "Вправа", "Підхід", "Повторення", "Вага, кг", "Час, сек", "Відпочинок, сек", "Нотатка", "Додаткові параметри"]];
   for (const measurement of state.measurements || []) rows.push(['Заміри тіла','',measurement.date,'Приватно','','','',measurement.weight ?? '','','',measurement.note || '',JSON.stringify(Object.fromEntries(['waist','chest','hips','biceps','thigh'].filter((key)=>measurement[key] !== undefined).map((key)=>[key,measurement[key]])))]);
-  for (const entry of state.manualSets || []) rows.push(['Ручний підхід','',entry.date,'Виконано',entry.exercise,1,entry.reps,entry.weight,'','','','']);
+  for (const entry of state.manualSets || []) rows.push(['Ручний підхід','',entry.date,'Виконано',entry.exercise,1,repsLabel(entry),entry.weight,'','',[profileLabel(entry.machine,state.trainingProfiles),weightDetailsLabel(entry)||'Загальна вага'].join(' · '),'']);
   for (const p of state.programs) for (const d of p.days) {
     if (d.warmup) rows.push(["Розминка", p.name, d.weekday + 1, "", "", "", "", "", "", "", d.warmup]);
     if (d.description || !d.items.length) rows.push(["Програма", p.name, d.weekday + 1, "", d.name, "", "", "", "", "", d.description]);
     for (const item of d.items) for (let k = 0; k < item.sets; k++) {
       const plan = setPlan(item, k);
-      rows.push(["Програма", p.name, d.weekday + 1, "", item.name, k + 1, plan.reps, plan.weight, plan.seconds, plan.rest, item.note, JSON.stringify(item.metrics || [])]);
+      rows.push(["Програма", p.name, d.weekday + 1, "", item.name, k + 1, plan.reps, plan.weight, plan.seconds, plan.rest, [item.note,weightDetailsLabel({...item,...plan}),item.superset ? `Суперсет ${item.superset}` : ''].filter(Boolean).join(' · '), JSON.stringify(item.metrics || [])]);
     }
   }
   for (const s of state.sessions) {
@@ -116,17 +120,17 @@ export function exportCsv(state) {
     if (s.description) rows.push(["Тренування", s.name, s.date, s.status, "", "", "", "", "", "", s.description]);
     if (s.status === "planned") for (const item of s.items) for (let k = 0; k < item.sets; k++) {
       const plan = setPlan(item, k);
-      rows.push(["Тренування", s.name, s.date, s.status, item.name, k + 1, plan.reps, plan.weight, plan.seconds, plan.rest, item.note, JSON.stringify(item.metrics || [])]);
+      rows.push(["Тренування", s.name, s.date, s.status, item.name, k + 1, plan.reps, plan.weight, plan.seconds, plan.rest, [item.note,weightDetailsLabel({...item,...plan}),item.superset ? `Суперсет ${item.superset}` : ''].filter(Boolean).join(' · '), JSON.stringify(item.metrics || [])]);
     }
     else {
       for (const index of s.simpleCompleted || []) rows.push(['Вправа', s.name, s.date, 'Виконано за списком', s.items[index]?.name]);
       const counts = new Map();
       if (!s.logs.length && !s.description) rows.push(["Тренування", s.name, s.date, s.status]);
       for (const log of s.logs) {
-        const key = `${log.index}:${log.quickResult ? 'quick' : log.warmup ? 'warmup' : 'working'}`;
+        const key = `${log.index}:${log.dropOf !== undefined ? `drop-${log.dropOf}` : log.quickResult ? 'quick' : log.warmup ? 'warmup' : 'working'}`;
         const k = counts.get(key) || 0;
         counts.set(key, k + 1);
-        rows.push(["Тренування", s.name, s.date, s.status, s.items[log.index]?.name, log.quickResult ? "Найкращий результат" : log.warmup ? `Розминочний ${k + 1}` : k + 1, log.reps, log.weightText || log.weight, log.seconds, "", s.items[log.index]?.note, JSON.stringify(log.metrics || [])]);
+        rows.push(["Тренування", s.name, s.date, s.status, s.items[log.index]?.name, log.dropOf !== undefined ? `Дроп до підходу ${s.logs.slice(0,log.dropOf+1).filter(l=>l.index===log.index && isWorkingSet(l)).length} · зниження ${k+1}` : log.quickResult ? "Найкращий результат" : log.warmup ? `Розминочний ${k + 1}` : k + 1, repsLabel(log), log.weightText || log.weight, log.seconds, "", [s.items[log.index]?.note, profileLabel(log.machine,state.trainingProfiles), weightDetailsLabel(log), s.items[log.index]?.superset ? `Суперсет ${s.items[log.index].superset}` : ''].filter(Boolean).join(' · '), JSON.stringify(log.metrics || [])]);
       }
     }
   }

@@ -1,3 +1,4 @@
+import { totalWeight, weightDetails } from './weight-details.js';
 import {copy,localDate} from './model.js';
 import {exerciseKey} from './training-data.js';
 import {countsAsWorkout} from './fitness.js';
@@ -11,9 +12,9 @@ export function repetitionRecords(sessions,reps=5,today=localDate()) {
     if(session.status!=='completed'||!dateValid(session.date)||session.date>today)continue;
     for(const log of session.logs||[]) {
       const item=session.items?.[log.index];
-      if(!item||log.warmup||log.weightUnknown||log.reps!==reps||!Number.isFinite(log.weight)||log.weight<0||log.weight>1000)continue;
+      if(!item||log.warmup||log.dropOf!==undefined||log.weightUnknown||log.reps!==reps||log.repsMax>log.reps||!Number.isFinite(log.weight)||log.weight<0||log.weight>1000)continue;
       const key=exerciseKey(item),before=result.get(key);
-      if(!before||log.weight>before.weight||log.weight===before.weight&&session.date>before.date)result.set(key,{key,name:item.name,weight:log.weight,reps,date:session.date,sessionId:session.id});
+      if(!before||totalWeight(log)>totalWeight(before)||totalWeight(log)===totalWeight(before)&&session.date>before.date)result.set(key,{key,name:item.name,weight:log.weight,...weightDetails(log),reps,date:session.date,sessionId:session.id});
     }
   }
   return [...result.values()].sort((a,b)=>a.name.localeCompare(b.name,'uk'));

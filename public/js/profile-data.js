@@ -1,6 +1,9 @@
+import { totalWeight } from './weight-details.js';
+import { calendarSnapshot } from './calendar-privacy.js';
+import { isWorkingSet } from './training-methods.js';
 import { countsAsWorkout, personalRecords, trainingStreak } from './fitness.js';
 import { progressSessions } from './manual-sets.js';
-export const visibilityDefaults = { activity: false, workouts: false, lastActive: false, progress: false, records: false, streak: false, gymBros: true };
+export const visibilityDefaults = { activity: false, workouts: false, lastActive: false, progress: false, records: false, streak: false, gymBros: true, calendar:false };
 export function profileVisibility(person) {
   return Object.fromEntries(Object.entries(visibilityDefaults).map(([key, fallback]) => [key, typeof person?.visibility?.[key] === 'boolean' ? person.visibility[key] : fallback]));
 }
@@ -11,12 +14,13 @@ export function sharedRecords(records, preference = null) {
 export function recordSharingKeys(records, preference, legacyVisible) {
   return preference===null?(legacyVisible?records.slice(0,200).map(record=>record.key):[]):[...new Set(preference.visibleKeys||[])];
 }
-export function profileSnapshots(sessions, recordPreference = null, manualSets = []) {
+export function profileSnapshots(sessions, recordPreference = null, manualSets = [],person={},programs=[]) {
   const completed = sessions.filter(countsAsWorkout);
   const allProgress = progressSessions(completed, manualSets);
   const logs = allProgress.flatMap((s) => s.logs.filter((l) => !l.warmup && !l.quickResult));
   return {
-    progress: { workouts: completed.length, sets: logs.length, volume: logs.reduce((sum, l) => sum + (l.weightUnknown ? 0 : l.reps * l.weight), 0) },
+    calendar:calendarSnapshot(sessions,person,programs),
+    progress: { workouts: completed.length, sets: logs.filter(isWorkingSet).length, volume: logs.reduce((sum, l) => sum + (l.weightUnknown ? 0 : l.reps * totalWeight(l)), 0) },
     records: { items: sharedRecords(personalRecords(allProgress), recordPreference), ...(Number.isInteger(recordPreference?.revision)?{visibilityVersion:recordPreference.revision}:{}) },
     streak: { ...trainingStreak(completed), lastWorkoutDate: completed.map((s) => s.date).sort().at(-1) || '' },
   };

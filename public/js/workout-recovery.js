@@ -28,7 +28,7 @@ export function loadSetDraft(storage, uid, session) {
     const item=session.items?.[session.index];
     if(data.exercise!==undefined&&data.exercise!==(item?.exerciseId||item?.name||''))return null;
     return Object.fromEntries(Object.entries(data.fields).filter(([name, value]) =>
-      /^(reps|weight|actual-metric-\d+)$/.test(name) && typeof value === 'string' && value.length <= 80));
+      /^(reps|weight|weightBasis|weightSides|actual-metric-\d+)$/.test(name) && typeof value === 'string' && value.length <= 80));
   } catch { return null; }
 }
 export function clearSetDraft(storage, uid, id) { storage.removeItem(key(uid, id)); }

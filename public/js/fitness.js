@@ -1,3 +1,6 @@
+import { totalWeight, weightDetails } from './weight-details.js';
+import { sameMachine } from './repetitions.js';
+import { isWorkingSet } from './training-methods.js';
 import { localDate } from './model.js';
 import { exerciseKey, previousResults } from './training-data.js';
 
@@ -26,22 +29,22 @@ export function trainingStreak(sessions, today = localDate()) {
   return { current: previous >= week(today) - 7 ? run : 0, best,
     trainedThisWeek: weeks.includes(week(today)) };
 }
-export function personalRecords(sessions) {
+export function personalRecords(sessions,machine=null) {
   const records = new Map();
   for (const session of sessions.filter((s) => s.status === 'completed')) {
     for (const log of session.logs) {
       const item = session.items[log.index];
-      if (!item || log.warmup || log.weightUnknown || log.reps <= 0) continue;
+      if (!item || machine !== null && !sameMachine(log,machine) || log.warmup || log.dropOf !== undefined || log.weightUnknown || log.reps <= 0) continue;
       const key = exerciseKey(item), previous = records.get(key);
-      if (!previous || log.weight > previous.weight || log.weight === previous.weight && log.reps > previous.reps)
-        records.set(key, { key, name: item.name, weight: log.weight, reps: log.reps, date: session.date });
+      if (!previous || totalWeight(log) > totalWeight(previous) || totalWeight(log) === totalWeight(previous) && log.reps > previous.reps)
+        records.set(key, { key, name: item.name, weight: log.weight, ...weightDetails(log), reps: log.reps, ...(log.repsMax === undefined ? {} : { repsMax: log.repsMax }), date: session.date });
     }
   }
   return [...records.values()].sort((a, b) => a.name.localeCompare(b.name, 'uk'));
 }
 export function previousWorkingSet(sessions, item, currentId, position) {
   // Skip warmup-only sessions when looking for the most recent working results.
-  const previous = previousResults(sessions, item, currentId, log => !log.warmup);
+  const previous = previousResults(sessions, item, currentId, log => isWorkingSet(log));
   if (!previous) return null;
   return previous.logs[Math.min(position, previous.logs.length - 1)] || null;
 }

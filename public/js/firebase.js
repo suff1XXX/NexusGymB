@@ -1,3 +1,5 @@
+import { calendarSnapshot, calendarScopeLabels } from './calendar-privacy.js';
+import { profileName, trainingProfileLimit, trainingProfiles, profileData, defaultTrainingProfile } from './training-profiles.js';
 import {personalRecords} from './fitness.js';
 import { reactionSummary, reactions } from './social.js';
 import { firebaseConfig, OWNER_UID } from "./config.js";
@@ -204,14 +206,36 @@ async function initialize() {
         }
       });
     },
+    async createTrainingProfile(name,legacyMachine='') {
+      requireOnline();
+      const uid=auth.currentUser?.uid;
+      if (!uid || !auth.currentUser.emailVerified) throw Error('Увійди та підтвердь пошту.');
+      const cleanName=profileName(name),base=`users/${uid}/trainingProfiles`;
+      const result=await C.runTransaction(db,async transaction=>{
+        const access=(await transaction.get(C.doc(db,`userAccess/${uid}`))).data();
+        const limit=trainingProfileLimit(access),snapshots=[];
+        for (let k=1;k<=5;k++) snapshots.push(await transaction.get(C.doc(db,`${base}/profile-${k}`)));
+        const records=trainingProfiles(snapshots.filter(snapshot=>snapshot.exists()).map(snapshot=>({id:snapshot.id,...snapshot.data()})));
+        if (records.some(profile=>profile.name.toLocaleLowerCase('uk') === cleanName.toLocaleLowerCase('uk'))) throw Error('Профіль із такою назвою вже є.');
+        const id=Array.from({length:limit-1},(_,k)=>`profile-${k+2}`).find(id=>!records.some(profile=>profile.id===id));
+        if (!id) throw Error(`Досягнуто ліміту: ${limit} профілі тренувань.`);
+        const now=Date.now(),data=profileData({name:cleanName,loads:{},createdAt:now,updatedAt:now,...(legacyMachine?{legacyMachine}: {})});
+        trainingProfiles([...records,{id,...data}]);
+        if (!snapshots[0].exists()) {const {id:unused,...primary}=defaultTrainingProfile();transaction.set(C.doc(db,`${base}/profile-1`),primary);}
+        transaction.set(C.doc(db,`${base}/${id}`),data);
+        return {id,...data};
+      });
+      store().invalidate([base,`${base}/profile-1`,`${base}/${result.id}`]);
+      return result;
+    },
     async toggleAccess(uid, key) {
       requireOnline();
-      if (!['homeWorkouts','nutrition','profileCustomization'].includes(key)) throw Error('Невідомий тип доступу.');
+      if (!['homeWorkouts','nutrition','profileCustomization','extraTrainingProfiles'].includes(key)) throw Error('Невідомий тип доступу.');
       const ref = C.doc(db, `userAccess/${uid}`);
       const result = await C.runTransaction(db, async transaction => {
         const snapshot = await transaction.get(ref);
         const previous = snapshot.exists() ? snapshot.data() : {};
-        const data = { homeWorkouts: previous.homeWorkouts === true, nutrition: previous.nutrition === true,profileCustomization:previous.profileCustomization===true };
+        const data = { homeWorkouts: previous.homeWorkouts === true, nutrition: previous.nutrition === true,profileCustomization:previous.profileCustomization===true,extraTrainingProfiles:previous.extraTrainingProfiles===true };
         data[key] = !data[key];
         transaction.set(ref,data);
         return data;
@@ -656,17 +680,32 @@ async function initialize() {
         return {preference,visibility};
       });
     },
-    async publishProfileStats(sessions, manualSets = []) {
+    async setProfileVisibility(visibility,sessions,programs=[],manualSets=[]) {
+      requireOnline();
+      if (typeof visibility.calendar !== 'boolean' || !Object.hasOwn(calendarScopeLabels,visibility.calendarScope)) throw Error('Перевір видимість і типи тренувань у календарі.');
+      const uid=auth.currentUser.uid,ref=C.doc(db,`publicProfiles/${uid}`);
+      const calendar=calendarSnapshot(sessions,{visibility},programs);
+      await C.runTransaction(db,async transaction=>{
+        const [existing,preference]=await Promise.all([transaction.get(ref),transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`))]);
+        if (!existing.exists()) throw Error('Спочатку завантаж профіль.');
+        const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,{visibility},programs);
+        transaction.update(ref,{visibility});
+        for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
+      });
+      return calendar;
+    },
+    async publishProfileStats(sessions, manualSets = [],programs=[]) {
       requireOnline();
       sessions = structuredClone(sessions);
-      manualSets = structuredClone(manualSets);
+      manualSets = structuredClone(manualSets);programs=structuredClone(programs);
       const uid = auth.currentUser.uid;
-      const signature = await statsSignature(sessions, manualSets, new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }));
-      return locked(`nexus-stats-${uid}`, () => publishOnce(localStorage, `nexus:published-stats:v1:${uid}`, signature, async () => {
+      const signature = await statsSignature(sessions, manualSets, new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }),programs);
+      return locked(`nexus-stats-${uid}`, () => publishOnce(localStorage, `nexus:published-stats:v2:${uid}`, signature, async () => {
         if (auth.currentUser?.uid !== uid) throw Error('Обліковий запис змінився.');
         await C.runTransaction(db,async transaction=>{
-          const preference=await transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`));
-          const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets);
+          const [preference,profile]=await Promise.all([transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`)),transaction.get(C.doc(db,`publicProfiles/${uid}`))]);
+          const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,profile.data()||{},programs);
+          if(!profile.exists())delete snapshots.calendar;
           for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
         });
         const completed = sessions.filter(s => s.status === 'completed').sort((a,b) => String(b.date).localeCompare(String(a.date))).slice(0,30);

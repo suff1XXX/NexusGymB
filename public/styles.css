@@ -2103,3 +2103,37 @@ dialog.exercise-detail-dialog { width:min(1050px,calc(100vw - 32px));max-width:1
 .appearance-header-preview{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:20px;padding:17px 20px;border:1px solid var(--line);border-radius:var(--profile-header-radius,22px);background:var(--profile-header-background,var(--panel));color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .appearance-header-preview strong{max-width:65%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}.appearance-header-preview>span{font-size:11px;color:var(--muted);white-space:nowrap}
 @media(max-width:600px){.appearance-header-preview{padding:14px}.appearance-header-preview>span{display:none}.appearance-header-preview strong{max-width:100%}}
+
+/* Result editing must also fit long equipment labels and narrow screens. */
+.manual-set-history .manual-set-row { grid-template-columns:minmax(0,1fr) auto auto auto; }
+.manual-set-row > span { white-space:normal;overflow-wrap:anywhere; }
+.progress-result-row { grid-template-columns:minmax(0,1fr) auto; }
+#workout-load-form fieldset { min-width:0;border:1px solid var(--line);border-radius:12px;margin:12px 0;padding:12px; }
+#workout-load-form legend { padding:0 6px;font-weight:600; }
+@media(max-width:600px) {
+  .manual-set-history .manual-set-row { grid-template-columns:minmax(0,1fr) auto; }
+  .manual-set-history .manual-set-row > .btn { grid-column:auto; }
+  #workout-load-form .formgrid { grid-template-columns:1fr; }
+}
+
+.weight-suggestion,.superset-notice { margin:12px 0;overflow-wrap:anywhere; }
+.weight-suggestion summary { cursor:pointer; }
+.drop-set-row { background:color-mix(in srgb,var(--line) 25%,transparent);font-size:12px; }
+.next-weight-entry { border-top:1px solid var(--line);padding:12px 0; }
+.workout-sets .btn { white-space:normal;min-height:36px;padding:6px 8px; }
+#drop-set-form .formgrid { min-width:0; }
+
+.training-profile-switcher{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin:18px 0;padding:18px 22px;border:1px solid var(--line);border-radius:18px;background:var(--panel)}
+.training-profile-switcher>label{margin:0;min-width:200px;gap:7px;font-size:12px;font-weight:650}.training-profile-switcher>div{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.training-profile-switcher>p{width:100%;margin:0}.training-profile-row{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:18px 0;border-bottom:1px solid var(--line)}.training-profile-row>div:first-child{display:grid;gap:6px;min-width:0;overflow-wrap:anywhere}.training-profile-row small{color:var(--muted)}
+@media(max-width:600px){.training-profile-switcher{padding:16px}.training-profile-switcher>label,.training-profile-switcher>div{width:100%}.training-profile-switcher>label select{width:100%}.training-profile-row{align-items:flex-start;flex-direction:column}}
+
+.calendar-privacy-types{min-width:0;border:1px solid var(--line);border-radius:14px;padding:18px;margin:18px 0}.calendar-privacy-types legend{padding:0 6px;font-weight:650;font-size:13px}.calendar-privacy-types p{margin-bottom:0}
+
+.home-side-column .training-profile-switcher{margin:0;display:grid;gap:14px;padding:22px}.home-side-column .training-profile-switcher>label{min-width:0;width:100%}.home-side-column .training-profile-switcher>label select{width:100%}.home-side-column .training-profile-switcher>div{justify-content:space-between;gap:10px}.home-side-column .training-profile-switcher .btn{white-space:normal}
+
+.weight-details{margin:14px 0;min-width:0}.weight-details-help{grid-column:1/-1;margin:0;line-height:1.65}.weight-details>label{margin:0;min-width:0}.weight-details select{width:100%}.plate-inventory{margin:18px 0}.plate-inventory summary{cursor:pointer;font-weight:650}.plate-inventory-row{display:grid;grid-template-columns:minmax(70px,1fr) minmax(70px,1fr) auto;align-items:end;gap:12px;margin:12px 0}.plate-inventory-row label{margin:0}.plate-inventory-row input{min-width:0;width:100%}.plate-inventory-row .btn{min-height:44px}.plate-result{margin-top:22px;padding:20px;border:1px solid var(--line);border-radius:16px;overflow-wrap:anywhere}.plate-result h3{font-size:25px;margin:14px 0}.plate-barbell{position:relative;display:flex;align-items:center;justify-content:center;min-height:106px;gap:10px;overflow-x:auto;padding:12px 10px}.plate-barbell:before{content:'';position:absolute;left:0;right:0;top:50%;height:8px;background:var(--muted);border-radius:6px;opacity:.5}.plate-bar-grip{position:relative;min-width:65px;height:12px;border-radius:4px;background:var(--muted)}.plate-stack{position:relative;display:flex;align-items:center;gap:3px}.plate-disc{display:grid;place-items:center;min-width:22px;padding:2px;height:var(--plate-height);border:1px solid color-mix(in srgb,var(--blue) 70%,var(--text));border-radius:5px;background:var(--soft);color:var(--text);font-size:9px;font-weight:700;writing-mode:vertical-rl}
+@media(max-width:520px){.weight-details{grid-template-columns:1fr}.plate-inventory-row{gap:8px;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.plate-inventory-row>.btn{grid-column:1/-1;justify-self:start}.plate-result{padding:16px}}
+
+.formgrid>.weight-details{grid-column:1/-1}.plate-result .btn{white-space:normal}.plate-result p{line-height:1.65}
+
+.record-row>span{min-width:0;white-space:normal;overflow-wrap:anywhere}.workout-sets td{white-space:normal;overflow-wrap:anywhere}

@@ -1,3 +1,10 @@
+import { weightBasisLabels, weightDetails, totalWeight, sameWeightDetails } from './weight-details.js';
+import { defaultPlates, plateInventory, calculatePlates } from './plate-calculator.js';
+import { calendarSharing, calendarScopeLabels } from './calendar-privacy.js';
+import { defaultTrainingProfile, defaultProfileId, trainingProfileLimit, trainingProfiles, profileName, profileContext, contextProfileId, availableProfiles, profileLabel, profileForContext, assertProfileAvailable, withProfileLoad, initialProfileLoads, completedProfileLoads, applyTrainingProfile, normalizeProfileContexts } from './training-profiles.js';
+import { authText, authError, authFailure, mountAuthPage } from './auth-page.js';
+import { isWorkingSet, nextWeightSuggestion, supersetPartner, configureSuperset, appendDropSet } from './training-methods.js';
+import { parseReps, repsLabel, machineName, sameMachine } from './repetitions.js';
 import {exerciseNoteId,exerciseNoteData} from './exercise-notes.js';
 import { exportCatalog, catalogImportPlan, catalogJsonLimit } from './catalog-json.js';
 import { parseWeight, weightLabel, simpleDone, saveQuickResult, finishChecklist, alternatives } from './workout-modes.js';
@@ -32,7 +39,7 @@ import { workoutSummary } from './workout-summary.js';
 import {weekStart,shiftDate,profileLayout,profileBlocks,defaultBlockOrder} from './training-experience.js';
 import {weeklyGoalCard,comparisonCard,reflectionCard,challengesCard,achievementHistory,layoutEditor} from './training-experience-view.js';
 import {repetitionRecords,sessionScope,replaceForToday,restoreForToday,replacementReasons} from './workout-additions.js';
-import {repetitionRecordsCard,activityCalendar,replacementBanner,meetingPollsCard} from './workout-additions-view.js';
+import {repetitionRecordsCard,activityCalendar,sharedActivityCalendar,replacementBanner,meetingPollsCard} from './workout-additions-view.js';
 import { measurementData, measurementFields, measurementSeries } from './body-measurements.js';
 import { manualSetData, progressSessions } from './manual-sets.js';
 import { adminStats } from './admin-stats.js';
@@ -78,6 +85,7 @@ function achievementMotionPaused() { try { return localStorage.getItem('nexus:ac
 const S = {
   achievements:{progress:null,display:{selectedIds:[],rankingEnabled:false},leaders:[],motionPaused:achievementMotionPaused(),onlyEarned:false,dirty:false,loading:false,error:'',leaderError:''},
   isOwner: false,
+  trainingProfiles:[defaultTrainingProfile()],trainingProfilesStoredIds:[],activeTrainingProfileId:defaultProfileId,trainingProfileLimit:3,trainingProfilesError:'',
   homeAccess: false,
   customizationAccess:false,
   adminAccess: {},
@@ -85,7 +93,7 @@ const S = {
   profile: null,
   programs: [],
   sessions: [],
-  recordReps:5,activityYear:Number(localDate().slice(0,4)),activityFilter:'all',meetingPolls:[],weeklyGoals:[],reflections:[],challenges:[],achievementEvents:[],trainingExtrasError:'',comparisonIds:{},
+  publicActivityYear:Number(localDate().slice(0,4)),recordReps:5,activityYear:Number(localDate().slice(0,4)),activityFilter:'all',meetingPolls:[],weeklyGoals:[],reflections:[],challenges:[],achievementEvents:[],trainingExtrasError:'',comparisonIds:{},
   measurements: [],
   measurementsError: '',
   manualSets: [],
@@ -120,6 +128,7 @@ const S = {
   progressExercise: "",
   progressPeriod: "90",
   progressSource: "all",
+  progressMachine: "*",
   historyFilters: { query: "", from: "", to: "", exercise: "" },
   timerSound: true,
   timerVibration: false,
@@ -160,6 +169,7 @@ let incomingShare = null;
 let stopNotices = null, replyingTo = null;
 let stopAchievementWatch = null,stopMedalEvents=null;
 let imageEdit = null;
+let plateCalculation=null,plateCalculationTarget=null;
 const activity = createActivityTracker({
   send: (uid) => db?.markActive?.(uid) ?? false,
   userId: () => S.loaded && S.user?.emailVerified ? S.user.uid : "",
@@ -244,6 +254,7 @@ function toast(message) {
   toast.t = setTimeout(() => (e.style.display = "none"), 5000);
 }
 function err(e) {
+  if (currentPage === "login") return authError(e);
   const codes = {
     "auth/invalid-email": "Перевір правильність email.",
     "auth/invalid-credential": "Неправильний email або пароль.",
@@ -268,111 +279,6 @@ function err(e) {
     "functions/permission-denied": "Немає доступу до керування досягненнями.",
   };
   return codes[e.code] || e.message || "Не вдалося виконати дію. Спробуй ще раз.";
-}
-function authPanel() {
-  if (S.user && !S.user.emailVerified)
-    return `
-      <section class="auth-panel">
-        <h1>Підтвердь пошту</h1>
-        <p class="muted">
-          Відкрий лист на
-          <b>${esc(S.user.email || "своїй пошті")}</b>
-          та натисни посилання. Потім повернися сюди.
-        </p>
-        ${
-          authNotice
-            ? `
-              <div class="notice">${esc(authNotice)}</div>
-            `
-            : ""
-        }
-        <div class="stack">
-          ${btn("Я підтвердив пошту", "check-email")}${btn(
-            "Надіслати лист повторно",
-            "resend-email",
-            "",
-            "secondary",
-          )}${btn("Вийти", "logout", "", "ghost")}
-        </div>
-        <p class="small muted">Якщо листа немає, перевір «Спам».</p>
-      </section>
-    `;
-  const register = authMode === "register";
-  return `
-    <section class="auth-panel">
-      <div class="auth-tabs">
-        ${btn("Вхід", "auth-mode", `type="button" data-id="login" aria-pressed="${!register}"`, !register ? "" : "ghost")}${btn(
-          "Реєстрація",
-          "auth-mode",
-          `type="button" data-id="register" aria-pressed="${register}"`,
-          register ? "" : "ghost",
-        )}
-      </div>
-      <h1 tabindex="-1">${register ? "Створи акаунт" : "З поверненням"}</h1><p class="auth-description">${register ? "Почни вести свою історію тренувань." : "Увійди, щоб продовжити свій прогрес."}</p>
-      ${
-        authNotice
-          ? `
-            <div class="notice">${esc(authNotice)}</div>
-          `
-          : ""
-      }
-      <form id="auth-form">
-        ${
-          register
-            ? `
-              <label>
-                Ім’я
-                <input name="name" autocomplete="name" value="${esc(authDraft.name)}" maxlength="100" required />
-              </label>
-            `
-            : ""
-        }
-        <label>
-          Email
-          <input type="email" name="email" autocomplete="email" value="${esc(authDraft.email)}" maxlength="320" required />
-        </label>
-        <label>
-          Пароль
-          <input
-            type="password"
-            name="password"
-            autocomplete="${register ? "new-password" : "current-password"}"
-            ${register ? 'minlength="8"' : ""}
-            maxlength="4096"
-            required
-          />
-          <button type="button" class="auth-password-toggle" data-action="toggle-auth-password" aria-pressed="false">Показати пароль</button>
-        </label>
-        ${
-          register
-            ? `
-              <label>
-                Повтори пароль
-                <input
-                  type="password"
-                  name="confirm"
-                  autocomplete="new-password"
-                  minlength="8"
-                  maxlength="4096"
-                  required
-                />
-              </label>
-              <p class="small muted">Щонайменше 8 символів. Після реєстрації підтвердь пошту.</p>
-            `
-            : ""
-        }
-        <button type="submit" class="btn wide" ${!db ? "disabled" : ""}>
-          ${register ? "Зареєструватися" : "Увійти"}
-        </button>
-        <div class="form-error" role="alert"></div>
-      </form>
-      ${
-        !register
-          ? btn("Забули пароль?", "reset-password", `type="button" ${!db ? "disabled" : ""}`, "auth-link")
-          : ""
-      }
-    </section>
-  `;
 }
 
 const pageFiles = {
@@ -501,45 +407,11 @@ function avatar() { return renderAvatar({...S.profile,uid:S.user?.uid,name:S.pro
 function brandMark() {
   return `<span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M10 16h12M8 9v14M4 12v8M24 9v14M28 12v8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></span><span class="brand-wordmark"><small>NEXUS</small><strong>GymB<span>.</span></strong></span>`;
 }
-function login() {
+function login({animate=false}={}) {
   if(!document.querySelector('link[data-auth-style]')){const link=document.createElement('link');link.rel='stylesheet';link.href=new URL('../auth.css',import.meta.url).href;link.dataset.authStyle='';document.head.append(link);}
-  const form = document.querySelector("#auth-form");
-  if (form) {
-    authDraft.email = form.elements.email.value;
-    if (form.elements.name) authDraft.name = form.elements.name.value;
-  }
-  document.title = `${S.user && !S.user.emailVerified ? "Підтвердження пошти" : authMode === "register" ? "Реєстрація" : "Вхід"} — Nexus GymB`;
-  const firstRender = !document.querySelector(".auth-card");
-  root.innerHTML = `
-    <main class="login">
-      <div class="auth-atmosphere" aria-hidden="true"><i></i><i></i><i></i><div class="auth-grid"></div></div>
-      <div class="auth-layout">
-      <aside class="auth-intro">
-        <a class="brand auth-brand" href="index.html" aria-label="Nexus GymB">${brandMark()}</a>
-        <span class="auth-eyebrow">ТВОЄ МІСЦЕ ДЛЯ ТРЕНУВАНЬ</span>
-        <h2>Тренування.<br>Прогрес.<br><em>Твій GymB.</em></h2>
-        <p>Програма, результати й GymBro — усе поруч.</p>
-        <div class="auth-visual" aria-hidden="true"><div class="auth-visual-top"><span>GYMB / TRAINING LOG</span><span class="auth-live-dot"></span></div><div class="auth-chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="auth-visual-bottom"><span>Програма</span><span>Результати</span><span>GymBro</span></div></div>
-      </aside>
-      <section class="auth-card ${firstRender ? "is-entering" : ""}" aria-label="Авторизація">
-        <div class="auth-card-caption"><span class="auth-card-dot"></span> NEXUS GYMB</div>
-        ${authPanel()}
-        <div id="login-error">
-          ${
-            bootError
-              ? `
-                <div class="error">
-                  ${esc(bootError)} ${btn("Спробувати знову", "retry", "", "secondary")}
-                </div>
-              `
-              : ""
-          }
-        </div>
-      </section>
-      </div>
-    </main>
-  `;
+  mountAuthPage(root,{mode:authMode,draft:authDraft,notice:authNotice,user:S.user,connected:!!db,bootError},{brand:brandMark(),animate,onLanguage:()=>login({animate:true})});
 }
+
 function nav() {
   return [
     ["home", "Головна"],
@@ -590,6 +462,7 @@ function shell(content) {
     <main class="main">
       <div id="offline">${syncNotice()}</div>
       ${resumeReminder()}
+      ${S.loaded && ['program','profile','session'].includes(S.route) ? trainingProfileSwitcher() : ''}
       ${content}
     </main>
   `;
@@ -860,6 +733,10 @@ function exercisePhoto(item, size = "thumb") {
     ${url ? `<img data-exercise-photo src="${esc(url)}" alt="${esc(item.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" />` : ""}
   </span>`;
 }
+function trainingProfileItems(items) {
+  const profile=S.trainingProfiles.find(profile=>profile.id === S.activeTrainingProfileId);
+  return profile?applyTrainingProfile({status:'active',items,logs:[],simpleCompleted:[]},profile).items:items;
+}
 function exerciseRows(items) {
   return items
     .map(
@@ -874,7 +751,7 @@ function exerciseRows(items) {
                 i.seconds
                   ? `${Math.round((i.seconds / 60) * 10) / 10} хв`
                   : `${i.sets} підходи · ${esc(i.reps)} повторень`
-              }${i.weight ? ` · ${i.weight} кг` : ""}
+              }${i.weight ? ` · ${esc(weightLabel(i))}` : ""}
             </p>
             ${metricSummary(i.metrics)}
             ${i.setPlans ? `<details><summary class="small">Параметри підходів</summary>${i.setPlans.map((p, k) => `<p class="small">${k + 1}: ${esc(p.reps)} повторень · ${p.weight} кг${p.seconds ? ` · ${p.seconds} сек` : ""} · відпочинок ${p.rest} сек</p>`).join("")}</details>` : ""}
@@ -904,17 +781,19 @@ function home() {
     d = chosenDay !== null ? schedule(p, chosenDay) : sequential ? nextSequenceDay(p, S.sessions) : today || nextDay(p),
     session = ongoing(),
     completed = S.sessions.filter((s) => s.status === "completed");
+  const optionalBlock = (content, hasItems, title) => hasItems ? content : `<details class="home-disclosure"><summary>${title}<span>Відкрити</span></summary>${content}</details>`;
   return (
-    heading(`Привіт, ${esc((S.profile?.name||S.user.displayName)?.split(" ")[0] || "спортсмене")} 👋`, "", owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") + streakCard() + (S.trainingExtrasError?`<div class="notice error" role="alert">${esc(S.trainingExtrasError)} ${btn('Оновити','reload','','secondary')}</div>`:'') +
+    '<div class="home-dashboard">' + heading(`Привіт, ${esc((S.profile?.name||S.user.displayName)?.split(" ")[0] || "спортсмене")} 👋`, new Intl.DateTimeFormat('uk-UA', {weekday:'long', day:'numeric', month:'long'}).format(new Date()), owner() ? btn("Перейти до адмінки", "route", 'data-id="admin"', "ghost") : "") + streakCard() + (S.trainingExtrasError?`<div class="notice error" role="alert">${esc(S.trainingExtrasError)} ${btn('Оновити','reload','','secondary')}</div>`:'') +
     (S.settings.announcement
       ? `
           <div class="notice">${esc(S.settings.announcement)}</div>
         `
       : "") +
     `
-      <div class="grid">
-        <div class="stack">
+      <div class="grid home-grid">
+        <div class="stack home-main-column">
           <section class="card hero">
+            <div class="home-hero-art" aria-hidden="true"><svg viewBox="0 0 160 160" fill="none"><path d="M48 112 112 48M31 95l34 34M25 101l34 34M95 31l34 34M101 25l34 34" stroke="currentColor" stroke-width="12" stroke-linecap="round"/></svg></div>
             <span class="eyebrow">
               ${session ? "Тренування триває" : sequential ? "Програма за чергою" : today ? "Сьогодні за планом" : "Сьогодні"}
             </span>
@@ -979,7 +858,7 @@ function home() {
             </div>
             ${
               d
-                ? workoutDescription(d) + exerciseRows(d.items) +
+                ? workoutDescription(d) + exerciseRows(trainingProfileItems(d.items)) +
                   (hasWorkoutContent(d) && chosenDay !== null
                     ? btn("Почати цей день", "start", `data-day="${d.weekday}"`, "secondary")
                     : hasWorkoutContent(d)
@@ -991,7 +870,8 @@ function home() {
             }
           </section>
         </div>
-        <div class="stack" style="align-content:start">
+        <div class="stack home-side-column" style="align-content:start">
+          ${trainingProfileSwitcher()}
           ${canUseHome() ? `<section class="card">
             <div class="sectionhead"><h2>Домашні комплекси</h2>${btn("＋ Створити", "new-home", "", "secondary")}</div>
             <p class="muted small">Для шиї, пресу чи інших вправ. Запускай у будь-який день поза основною програмою.</p>
@@ -1002,18 +882,11 @@ function home() {
             <p class="muted small">Обери дату, опиши тренування своїми словами або додай вправи.</p>
             ${plannedWorkouts()}
           </section>
-          <section class="card">
-            <span class="eyebrow">Твоя послідовність</span>
-            <div class="stat" style="margin:20px 0 5px">
-              ${completed.length}
-              <span style="font-size:17px;color:var(--muted);font-weight:400;letter-spacing:0">
-                тренувань
-              </span>
-            </div>
-            <p class="muted small">завершено та збережено</p>
-            <div class="row" style="border-top:1px solid var(--line);padding-top:18px">
-              <span class="small muted">Виконані підходи</span>
-              <b>${completed.reduce((a, s) => a + s.logs.length, 0)}</b>
+          <section class="card home-totals">
+            <h2>Твій підсумок</h2>
+            <div class="home-metrics">
+              <div><strong>${completed.length}</strong><span>Завершені тренування</span></div>
+              <div><strong>${completed.reduce((a, s) => a + s.logs.filter(isWorkingSet).length, 0)}</strong><span>Робочі підходи</span></div>
             </div>
           </section>
           <section class="card">
@@ -1027,7 +900,7 @@ function home() {
           </section>
         </div>
       </div>
-    `+`<div class="home-extras">${weeklyGoalCard(S.sessions,S.weeklyGoals,localDate())}${challengesCard(S.challenges,S.user.uid,localDate())}</div>`+activityCalendar(S.sessions,S.programs,S.activityYear,S.activityFilter,localDate(),S.calendarDate)+meetingPollsCard(S.meetingPolls,S.user.uid)
+    `+`<div class="home-extras">${weeklyGoalCard(S.sessions,S.weeklyGoals,localDate())}${optionalBlock(challengesCard(S.challenges,S.user.uid,localDate()), S.challenges?.length, 'Челенджі з друзями')}</div>`+activityCalendar(S.sessions,S.programs,S.activityYear,S.activityFilter,localDate(),S.calendarDate)+optionalBlock(meetingPollsCard(S.meetingPolls,S.user.uid), S.meetingPolls?.length, 'Спільні тренування та опитування')+'</div>'
   );
 }
 function plannedWorkouts() {
@@ -1069,7 +942,7 @@ function history(list) {
                   <h3>${esc(s.name)}</h3>
                   <p class="small muted">
                     ${esc(s.date)} · ${Math.round((s.endedAt - s.startedAt) / 60000)} хв ·
-                    ${s.logs.length} підходів
+                    ${s.logs.filter(isWorkingSet).length} основних підходів${s.logs.some(log=>log.dropOf !== undefined) ? ` · ${s.logs.filter(log=>log.dropOf !== undefined).length} дропів` : ''}
                   </p>
                 </div>
                 <button class="mini-btn" data-action="history" data-id="${s.id}">Деталі</button>
@@ -1127,7 +1000,7 @@ function programs() {
                         (d) => `
                           <details class="program-day" name="program-days">
                             <summary><span class="number">${p.scope === "home" ? "⌂" : esc(dayLabel(p, d))}</span><span class="grow"><strong>${esc(d.name)}</strong><span class="small muted">${esc(d.groups)} · ${d.items.length} вправ</span></span><span class="day-chevron" aria-hidden="true">⌄</span></summary>
-                            <div class="program-day-content">${workoutDescription(d)}${exerciseRows(d.items) || (d.description ? "" : '<p class="muted">Плану ще немає.</p>')}
+                            <div class="program-day-content">${workoutDescription(d)}${exerciseRows(trainingProfileItems(d.items)) || (d.description ? "" : '<p class="muted">Плану ще немає.</p>')}
                             ${btn(
                               "Почати",
                               "start",
@@ -1298,8 +1171,8 @@ function options(list, value) {
 function setPlanEditor(item, n, j) {
   return `<div class="set-plan-editor"><div class="actions">${btn(item.setPlans ? "Оновити кількість підходів" : "Налаштувати кожен підхід", "configure-sets", `type="button" data-n="${n}" data-j="${j}"`, "secondary")}${item.setPlans ? btn("Однакові підходи", "uniform-sets", `type="button" data-n="${n}" data-j="${j}"`, "ghost") : ""}</div>
     ${item.setPlans ? `<p class="small muted">Ці значення застосовуються замість спільних параметрів вправи. Після зміни кількості підходів натисни «Оновити кількість підходів».</p>` + item.setPlans.map((p, k) => `<fieldset><legend>Підхід ${k + 1}</legend><div class="formgrid four">
-      ${field("Повторення", `plan-reps-${n}-${j}-${k}`, p.reps, editorHistory ? "number" : "text", editorHistory ? 'required min="0" max="1000"' : 'maxlength="20"')}
-      ${field("Вага, кг", `plan-weight-${n}-${j}-${k}`, p.weight, "number", 'required min="0" max="1000" step="0.5"')}
+      ${field("Повторення", `plan-reps-${n}-${j}-${k}`, p.reps, "text", 'maxlength="20" placeholder="10-12"')}
+      ${weightDetailsFields({...item,...p},`plan-${n}-${j}-${k}-`)}${field("Вага, кг", `plan-weight-${n}-${j}-${k}`, p.weight, "number", 'required min="0" max="1000" step="0.5"')}
       ${field("Час, сек", `plan-seconds-${n}-${j}-${k}`, p.seconds, "number", 'required min="0" max="7200"')}
       ${field("Відпочинок, сек", `plan-rest-${n}-${j}-${k}`, p.rest, "number", 'required min="0" max="600"')}
     </div></fieldset>`).join("") : ""}</div>`;
@@ -1459,7 +1332,7 @@ function programEditor() {
                               </button>
                             </div>
                           </div>
-                          ${i.custom ? field("Назва вправи своїми словами", `customname-${n}-${j}`, i.name, "text", 'required maxlength="100"') : ""}
+                          ${i.custom ? field("Назва вправи своїми словами", `customname-${n}-${j}`, i.name, "text", 'required maxlength="100"') : ""}${trainingContextField(`machine-${n}-${j}`,i.machine || profileContext(S.activeTrainingProfileId))}${weightDetailsFields(i,`item-${n}-${j}-`)}<div class="formgrid">${field("Крок підказки ваги, кг", `weightstep-${n}-${j}`, i.weightStep ?? 2.5, "number", 'required min="0.01" max="100" step="0.01"')}${field("Група суперсету (необов’язково)", `superset-${n}-${j}`, i.superset || "", "text", 'maxlength="40" placeholder="Наприклад, A"')}</div><p class="small muted">Суперсет — дві вправи поспіль. Для пари впиши однакову групу, наприклад A, у двох вправ і задай однакову кількість підходів. Відпочинок — після обох вправ.</p>
                           ${mode === "cross" ? '<div class="actions feature-picker">' + builderFeatures.map(([key, label]) => btn((itemFeatures(i).includes(key) ? "✓ " : "＋ ") + label, "toggle-feature", 'type="button" data-n="' + n + '" data-j="' + j + '" data-feature="' + key + '" aria-pressed="' + itemFeatures(i).includes(key) + '"', "ghost")).join("") + '</div>' : ""}
                           <div class="item-parameters"><div class="formgrid four">
                             ${field(
@@ -1590,6 +1463,10 @@ function collectEditor() {
     d.description = String(v.get(`description-${n}`) || "");
     d.warmup = String(v.get(`warmup-${n}`) || "").trim();
     d.items.forEach((i, j) => {
+      i.weightStep = Number(v.get(`weightstep-${n}-${j}`));
+      i.superset = String(v.get(`superset-${n}-${j}`) || '').trim();
+      Object.assign(i,readWeightDetails(v,`item-${n}-${j}-`));
+      i.machine = machineName(String(v.get(`machine-${n}-${j}`) || ""));
       if (i.custom) i.name = String(v.get(`customname-${n}-${j}`) || "").trim();
       for (const k of ["sets", "reps", "seconds", "weight", "rest", "note"])
         i[k] = ["reps", "note"].includes(k) ? v.get(`${k}-${n}-${j}`) : +v.get(`${k}-${n}-${j}`);
@@ -1601,6 +1478,7 @@ function collectEditor() {
             const value = v.get(`plan-${key}-${n}-${j}-${k}`);
             if (value !== null) plan[key] = key === "reps" ? value : +value;
           }
+          Object.assign(plan,readWeightDetails(v,`plan-${n}-${j}-${k}-`));
           return plan;
         });
       }
@@ -1616,19 +1494,119 @@ function collectEditor() {
 }
 function setLogLabel(logs, position) {
   const log = logs[position];
-  const number = logs.slice(0, position + 1).filter((l) => l.index === log.index && !!l.warmup === !!log.warmup).length;
+  if (log.dropOf !== undefined) return `Дроп · зниження ${logs.slice(0,position+1).filter(entry=>entry.dropOf === log.dropOf).length}`;
+  const number = logs.slice(0, position + 1).filter((l) => l.index === log.index && (log.warmup ? l.warmup : isWorkingSet(l))).length;
   if (log.quickResult) return "Найкращий результат за тренування";
   return `${log.warmup ? "Розминочний підхід" : "Робочий підхід"} ${number}`;
 }
 function previousWorkout(item, session) {
   const previous = previousResults(S.sessions, item, session.id);
-  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
+  return `<details class="previous-workout" ${previous ? "open" : ""}><summary>Попередні результати${previous ? ` · ${esc(previous.session.date)}` : ""}</summary>${previous ? `<p class="small muted">${esc(previous.session.name)}</p>${previous.logs.map((l, k, logs) => `<p class="small">${setLogLabel(logs, k)}: ${repsLabel(l)} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}` : '<p class="small muted">Для цієї вправи ще немає виконаних підходів у завершених тренуваннях.</p>'}</details>`;
 }
 function previousWeight(item, session, position) {
-  const previous = previousResults(S.sessions, item, session.id, log => !log.warmup);
+  const previous = previousResults(S.sessions, item, session.id, log => isWorkingSet(log));
   if (!previous) return '<p class="small muted previous-weight">Минулого разу: ще немає записаної ваги.</p>';
   const logs = position === undefined ? previous.logs : [previous.logs[Math.min(position, previous.logs.length - 1)]];
-  return `<div class="notice previous-weight"><strong>Минулого разу${position === undefined ? '' : ` · підхід ${position + 1}`}</strong><p>${logs.map(log => `${esc(weightLabel(log))} × ${log.reps}`).join(' · ')}</p><span class="small muted">${esc(previous.session.date)}</span></div>`;
+  return `<div class="notice previous-weight"><strong>Минулого разу${position === undefined ? '' : ` · підхід ${position + 1}`}</strong><p>${logs.map(log => `${esc(weightLabel(log))} × ${repsLabel(log)}`).join(' · ')}</p><span class="small muted">${esc(previous.session.date)}</span></div>`;
+}
+function trainingProfileSwitcher() {
+  const profiles=availableProfiles(S.trainingProfiles,S.trainingProfileLimit);
+  return `<section class="training-profile-switcher"><label>Профіль тренувань<select data-training-profile-select aria-label="Профіль тренувань" ${S.trainingProfilesError?'disabled':''}>${profiles.map(profile=>`<option value="${profile.id}" ${profile.id === S.activeTrainingProfileId?'selected':''}>${esc(profile.name)}</option>`).join('')}</select></label><div><span class="small muted">${profiles.length} / ${S.trainingProfileLimit} профілів</span>${btn('Керувати профілями','training-profiles','','ghost')}${btn('Калькулятор дисків','plate-calculator','','ghost')}</div>${S.trainingProfilesError?'<p class="error" role="alert">Не вдалося завантажити профілі тренувань. Онови сторінку після перевірки підключення та правил доступу.</p>':''}</section>`;
+}
+function trainingContextField(name,value,allowArchive=true) {
+  const current=value || profileContext(defaultProfileId),profiles=availableProfiles(S.trainingProfiles,S.trainingProfileLimit);
+  const archive=allowArchive && !profiles.some(profile=>profileContext(profile.id) === current);
+  return `<label>Профіль тренувань<select name="${name}">${profiles.map(profile=>`<option value="${profileContext(profile.id)}" ${profileContext(profile.id) === current?'selected':''}>${esc(profile.name)}</option>`).join('')}${archive?`<option value="${esc(current)}" selected>${esc(profileLabel(current,S.trainingProfiles))}</option>`:''}</select></label>`;
+}
+function trainingProfilesDialog() {
+  const profiles=availableProfiles(S.trainingProfiles,S.trainingProfileLimit);
+  openModal(`<div class="sectionhead"><div><h2>Профілі тренувань</h2><p class="small muted">${profiles.length} з ${S.trainingProfileLimit}. Вибраний профіль: ${esc(profileLabel(profileContext(S.activeTrainingProfileId),S.trainingProfiles))}.</p></div>${btn('Закрити','close','','ghost')}</div><p class="muted">Створи профілі під різні умови або варіанти тренувань. Кожен має власні ваги й підказки; перейменування зберігає історію.</p>${S.trainingProfiles.map(profile=>{const locked=!profiles.includes(profile);return `<div class="training-profile-row"><div><strong>${esc(profile.name)}</strong><small>${locked?'Потрібен доступ до 5 профілів':profile.id === S.activeTrainingProfileId?'Вибраний профіль':'Профіль тренувань'}</small></div><div class="actions">${btn('Вибрати','select-training-profile',`data-id="${profile.id}" ${locked?'disabled':''}`,'secondary')}${btn('Назва','rename-training-profile',`data-id="${profile.id}" ${locked?'disabled':''}`,'ghost')}</div></div>`;}).join('')}<div class="actions">${btn('＋ Створити профіль','new-training-profile',profiles.length >= S.trainingProfileLimit || S.trainingProfilesError?'disabled':'','secondary')}</div><p class="small muted">Стандартний ліміт — 3 профілі. Адміністратор може надати доступ до 5.</p>`);
+}
+function trainingProfileForm(id='') {
+  const profile=id?assertProfileAvailable(S.trainingProfiles,id,S.trainingProfileLimit):null;
+  if (!profile && availableProfiles(S.trainingProfiles,S.trainingProfileLimit).length >= S.trainingProfileLimit) throw Error('Досягнуто ліміту профілів тренувань.');
+  const used=new Set(S.trainingProfiles.map(profile=>String(profile.legacyMachine || '').toLocaleLowerCase('uk')));
+  const legacy=[...new Set([...S.sessions.flatMap(session=>session.logs.map(log=>log.machine)),...S.manualSets.map(entry=>entry.machine)].filter(value=>value && !contextProfileId(value) && !used.has(value.toLocaleLowerCase('uk'))))];
+  openModal(`<h2>${profile?'Перейменувати профіль':'Новий профіль тренувань'}</h2><form id="training-profile-form" data-id="${id}">${field('Назва профілю','name',profile?.name || '','text','required maxlength="40" placeholder="Наприклад, Силовий"')}${!profile && legacy.length?`<label>Прив’язати старі записи (необов’язково)<select name="legacyMachine"><option value="">Почати окрему історію</option>${legacy.map(value=>`<option value="${esc(value)}">${esc(value)}</option>`).join('')}</select></label>`:''}<button class="btn" type="submit">${profile?'Зберегти назву':'Створити профіль'}</button><div class="form-error" role="alert"></div></form>`);
+}
+async function selectTrainingProfile(id) {
+  if (S.trainingProfilesError) throw Error('Спочатку завантаж профілі тренувань.');
+  assertProfileAvailable(S.trainingProfiles,id,S.trainingProfileLimit);
+  const session=ongoing(),now=Date.now(),initialLoads=session?initialProfileLoads(session,S.trainingProfiles,S.trainingProfileLimit,now):[];
+  const profiles=S.trainingProfiles.map(profile=>initialLoads.find(updated=>updated.id === profile.id)||profile);
+  const profile=assertProfileAvailable(profiles,id,S.trainingProfileLimit),updated=session?applyTrainingProfile(session,profile):null;
+  const entries=[[privatePath('trainingProfileSettings/selection'),{activeId:id,updatedAt:now}],...initialLoads.map(profile=>[privatePath(`trainingProfiles/${profile.id}`),stripId(profile)])];
+  if (updated) entries.push([privatePath(`sessions/${updated.id}`),{...stripId(updated),updatedAt:now}]);
+  await db.saveMany(entries);
+  S.trainingProfiles=profiles;S.trainingProfilesStoredIds=[...new Set([...S.trainingProfilesStoredIds,...initialLoads.map(profile=>profile.id)])];
+  S.activeTrainingProfileId=id;S.progressMachine=profileContext(id);
+  if (updated) {S.sessions=S.sessions.map(value=>value.id === updated.id?updated:value);try{clearSetDraft(localStorage,S.user.uid,updated.id);}catch{}}
+  render();toast(`Профіль: ${profile.name}`);
+}
+function weightDetailsFields(value={},prefix='') {
+  const details=weightDetails(value);
+  return `<div class="formgrid weight-details" data-weight-details><label>Як записана вага<select name="${prefix}weightBasis" data-weight-basis>${Object.entries(weightBasisLabels).map(([key,title])=>`<option value="${key}" ${details.weightBasis === key?'selected':''}>${title}</option>`).join('')}</select></label><label data-weight-sides-field ${details.weightBasis === 'total'?'hidden':''}>Рук / сторін у цьому записі<select name="${prefix}weightSides"><option value="2" ${details.weightBasis === 'total'||details.weightSides === 2?'selected':''}>Дві — повторення на кожну</option><option value="1" ${details.weightBasis !== 'total'&&details.weightSides === 1?'selected':''}>Одна рука / сторона</option></select></label><p class="small muted weight-details-help" ${details.weightBasis === 'total'?'hidden':''}>Для гантелей і хамера вкажи вагу однієї руки / сторони. Повторення — на кожну вказану руку / сторону. Для роботи окремо або різної ваги ліворуч і праворуч записуй кожну руку / сторону з варіантом «Одна». Обсяг врахує вибрану кількість.</p></div>`;
+}
+function readWeightDetails(values,prefix='') {
+  return weightDetails({weightBasis:String(values.get(`${prefix}weightBasis`) || 'total'),weightSides:Number(values.get(`${prefix}weightSides`) || 2)});
+}
+function updateWeightDetailsFields(form) {
+  for (const group of form.querySelectorAll('[data-weight-details]')) {
+    const hidden=group.querySelector('[data-weight-basis]').value === 'total';
+    group.querySelector('[data-weight-sides-field]').hidden=hidden;
+    const help=group.querySelector('.weight-details-help');if(help)help.hidden=hidden;
+  }
+}
+function plateCalculatorKey() {return `nexus:plates:${S.user?.uid || 'local'}:${S.activeTrainingProfileId}`;}
+function plateInventoryRow(row,index) {
+  return `<div class="plate-inventory-row" data-plate-row="${index}"><label>Диск, кг<input name="plate-weight-${index}" type="number" min="0.01" max="50" step="0.01" value="${row.weight}" required /></label><label>Доступно пар<input name="plate-pairs-${index}" type="number" min="0" max="20" step="1" value="${row.pairs}" required /></label>${btn('Прибрати','remove-plate-row','type="button"','ghost')}</div>`;
+}
+function clearPlateCalculation() {
+  plateCalculation=null;
+  const result=modal.querySelector('#plate-calculator-result');if(result)result.innerHTML='';
+}
+function openPlateCalculator() {
+  captureSetInputs();
+  const form=document.querySelector('#set-form'),session=ongoing();
+  const details=form?readWeightDetails(new FormData(form)):weightDetails();
+  plateCalculationTarget=form && session?{sessionId:session.id,index:session.index,logs:session.logs.length,details}:null;
+  plateCalculation=null;
+  let config={barWeight:details.weightBasis === 'perSide'?0:20,plates:defaultPlates()};
+  try {const saved=JSON.parse(localStorage.getItem(plateCalculatorKey())||'null');if(saved)config={barWeight:saved.mode === (details.weightBasis === 'perSide'?'perSide':'total')?Math.max(0,Math.min(100,Number(saved.barWeight)||0)):config.barWeight,plates:plateInventory(saved.plates)};}catch{}
+  let target='';
+  if(form && details.weightBasis !== 'perHand')try{const parsed=parseWeight(form.elements.weight.value);if(!parsed.weightUnknown)target=parsed.weight;}catch{}
+  openModal(`<div class="sectionhead"><h2>Калькулятор дисків</h2>${btn('Закрити','close','','ghost')}</div><p class="small muted">Однакові диски на обидва боки штанги або хамера. Враховуються лише доступні пари; вага грифа / основи додається окремо.</p><form id="plate-calculator-form"><div class="formgrid">${field('Цільова вага, кг','target',target,'number','required min="0" max="1000" step="0.01"')}<label>Ціль указана як<select name="mode"><option value="total" ${details.weightBasis !== 'perSide'?'selected':''}>Загальна вага разом з основою</option><option value="perSide" ${details.weightBasis === 'perSide'?'selected':''}>Диски на одну сторону</option></select></label>${field('Гриф / основа, кг','barWeight',config.barWeight,'number','required min="0" max="100" step="0.01"')}</div><p class="small muted">Для хамера можна вказати основу 0 кг і рахувати лише додані диски. Калькулятор не оцінює силу важелів тренажера.</p><details class="plate-inventory"><summary>Доступні диски</summary><p class="small muted">Одна пара — це два однакові диски, по одному на кожен бік. Немає такого розміру — вкажи 0 пар.</p><div id="plate-inventory-rows">${config.plates.map(plateInventoryRow).join('')}</div>${btn('＋ Додати розмір','add-plate-row','type="button"','ghost')}</details><button class="btn" type="submit">Розрахувати</button><div class="form-error" role="alert"></div></form><div id="plate-calculator-result" aria-live="polite"></div>`);
+}
+function plateCalculatorResult(result) {
+  const side=result.perSide.map(row=>`${row.weight} кг × ${row.count}`).join(' + ') || 'Без дисків';
+  const plates=result.perSide.flatMap(row=>Array.from({length:row.count},()=>row.weight));
+  const stack=values=>values.map(value=>`<span class="plate-disc" style="--plate-height:${Math.min(84,28+value*2)}px">${value}</span>`).join('');
+  const canApply=plateCalculationTarget && plateCalculationTarget.details.weightBasis !== 'perHand';
+  const value=plateCalculationTarget?.details.weightBasis === 'perSide'?result.perSideWeight:result.total;
+  return `<section class="plate-result"><span class="badge">${result.exact?'Точна вага':'Найближча доступна нижча вага'}</span><h3>${result.total} кг разом</h3>${result.exact?'':`<p class="small muted">Ціль ${result.targetTotal} кг недоступна з цими дисками.${result.higherTotal !== null?` Найближча вища вага: ${result.higherTotal} кг.`:' Більшу вагу з наявних пар зібрати неможливо.'}</p>`}<div class="plate-barbell" aria-hidden="true"><div class="plate-stack">${stack([...plates].reverse())}</div><span class="plate-bar-grip"></span><div class="plate-stack">${stack(plates)}</div></div><p><strong>На кожен бік:</strong> ${side}</p><p class="small muted">Гриф / основа: ${result.barWeight} кг · Диски на сторону: ${result.perSideWeight} кг · Усього дисків: ${result.plateCount}</p>${canApply?btn(`Підставити ${value} кг у підхід`,'apply-plate-result','','secondary'):''}${plateCalculationTarget?.details.weightBasis === 'perHand'?'<p class="small muted">Для гантелей введи вагу однієї гантелі безпосередньо в підхід. Цей калькулятор збирає симетричну штангу або тренажер.</p>':''}</section>`;
+}
+function workoutLoadButton(item, index) {
+  return `<div class="actions">${btn('Профіль і ваги підходів','workout-load',`data-index="${index}"`,'ghost')}<span class="small muted">${esc(profileLabel(item.machine,S.trainingProfiles))}</span></div>`;
+}
+function workoutLoadEditor(index) {
+  const session = ongoing(), item = session?.items[index];
+  if (!item) throw Error('Вправу не знайдено.');
+  const program = S.programs.find(p=>p.id === session.programId);
+  const matchingItems = program?.days.find(day=>day.weekday === session.dayId)?.items.filter(entry=>exerciseKey(entry) === exerciseKey(item)) || [];
+  const partner=supersetPartner(session.items,index);
+  openModal(`<h2>Профіль і ваги підходів</h2><p>${esc(item.name)}</p><p class="small muted">Ваги й підказки зберігаються окремо для вибраного профілю тренувань. Нові ваги застосуються до наступних підходів; виконані записи залишаться в історії.</p><form id="workout-load-form" data-session="${esc(session.id)}" data-index="${index}">${trainingContextField('machine',item.machine || profileContext(S.activeTrainingProfileId))}${weightDetailsFields(item)}${field('Крок підказки ваги, кг','weightStep',item.weightStep ?? 2.5,'number','required min="0.01" max="100" step="0.01"')}<label>Вправа в парі для суперсету<select name="supersetPartner"><option value="-1">Без суперсету</option>${session.items.map((entry,k)=>k === index ? '' : `<option value="${k}" ${partner === k ? 'selected' : ''}>${esc(entry.name)} · ${entry.sets} підходів</option>`).join('')}</select></label><p class="small muted">Суперсет: підхід першої вправи → підхід другої → відпочинок. У пари має бути однакова кількість підходів. Обирай пару до першого запису. Це необов’язкова функція.</p>${Array.from({length:item.sets},(_,k)=>{const plan=setPlan(item,k);return `<fieldset><legend>Підхід ${k+1}</legend><div class="formgrid">${field('Вага, кг',`weight-${k}`,plan.weight,'number','required min="0" max="1000" step="any"')}${field('Повторення',`reps-${k}`,plan.reps || 0,'text','required maxlength="12" placeholder="10-12"')}</div></fieldset>`;}).join('')}<label><input name="rememberProfile" type="checkbox" checked /> Запам’ятати ці ваги в цьому профілі</label>${matchingItems.length === 1 ? '<label><input name="remember" type="checkbox" /> Зберегти налаштування у програмі для наступних тренувань</label>' : ''}<button class="btn" type="submit">Зберегти налаштування</button><div class="form-error" role="alert"></div></form>`);
+}
+function progressHistory(analytics) {
+  if (S.progressMetric === 'frequency') return '';
+  const since = new Date();since.setDate(since.getDate() - Number(S.progressPeriod));
+  const entries = analytics.filter(s=>s.status === 'completed' && (S.progressPeriod === 'all' || s.date >= localDate(since))).flatMap(session=>session.logs.flatMap(log=>!log.warmup && session.items[log.index] && exerciseKey(session.items[log.index]) === S.progressExercise && (S.progressMachine === '*' || sameMachine(log,S.progressMachine)) ? [{session,log}] : []))
+    .sort((a,b)=>b.session.date.localeCompare(a.session.date) || b.session.endedAt-a.session.endedAt).slice(0,12);
+  return `<details class="previous-workout"><summary>Змінити результати · ${entries.length}</summary><p class="small muted">Нове навантаження для профілю задавай у «Профіль і ваги підходів» під час тренування. Тут можна виправити вже збережені записи.</p>${entries.map(({session,log})=>`<div class="manual-set-row progress-result-row"><span>${esc(session.date)} · ${esc(weightLabel(log))} × ${repsLabel(log)} · ${esc(profileLabel(log.machine,S.trainingProfiles))}</span>${btn('Змінити',session.manualSet ? 'edit-manual-set' : 'edit-history',`data-id="${esc(session.manualSet ? session.id.slice(11) : session.id)}"`,'ghost')}</div>`).join('') || '<p class="muted">Записів ще немає.</p>'}</details>`;
+}
+function editManualSet(id) {
+  const entry = S.manualSets.find(record=>record.id === id);
+  if (!entry) throw Error('Підхід не знайдено.');
+  openModal(`<h2>Змінити підхід</h2><p>${esc(entry.exercise)}</p><form id="edit-manual-set-form" data-id="${esc(id)}"><div class="formgrid">${field('Вага, кг','weight',entry.weight,'number','required min="0" max="1000" step="any"')}${field('Повторення','reps',repsLabel(entry),'text','required maxlength="12" placeholder="10-12"')}${trainingContextField('machine',entry.machine || '')}${weightDetailsFields(entry)}${field('Дата','date',entry.date,'date',`required max="${localDate()}"`)}</div><button class="btn" type="submit">Зберегти зміни</button><div class="form-error" role="alert"></div></form>`);
 }
 function progressView() {
   const analytics = progressSessions(S.progressSource === 'manual' ? [] : S.sessions, S.progressSource === 'workouts' ? [] : S.manualSets);
@@ -1639,16 +1617,21 @@ function progressView() {
   if (!items.has(S.progressExercise)) S.progressExercise = items.keys().next().value || "";
   const sinceDate = new Date();
   sinceDate.setDate(sinceDate.getDate() - +S.progressPeriod);
+  const machineOptions = [...new Set([...S.trainingProfiles.map(profile=>profileContext(profile.id)),...analytics.flatMap(session => [...session.logs.filter(log => session.items[log.index] && exerciseKey(session.items[log.index]) === S.progressExercise).map(log => log.machine || profileContext(defaultProfileId)), ...(session.simpleCompleted || []).filter(index=>session.items[index] && exerciseKey(session.items[index]) === S.progressExercise).map(index=>session.items[index].machine || profileContext(defaultProfileId))])])].sort((a,b)=>a.localeCompare(b,'uk'));
+  if (S.progressMachine !== "*" && !machineOptions.includes(S.progressMachine)) S.progressMachine = "*";
   const points = progressSeries(S.progressMetric === 'frequency' ? (S.progressSource === 'manual' ? [] : S.sessions) : analytics, { metric: S.progressMetric, key: S.progressExercise,
-    since: S.progressPeriod === "all" ? "" : localDate(sinceDate) });
+    machine: S.progressMachine === "*" ? null : S.progressMachine, since: S.progressPeriod === "all" ? "" : localDate(sinceDate) });
   const units = { weight: "кг", volume: "кг × повторення", frequency: "тренувань", performed: "виконань" };
   return `<section class="card progress-section"><h2>Прогрес ${privateProfileBadge()}</h2>
     <p class="small muted">Переглядай результати завершених тренувань і підходів, записаних вручну.</p>
     <div class="formgrid"><label>Джерело даних<select id="progress-source">${[['all','Усі результати'],['workouts','Із тренувань'],['manual','Ручні записи']].map(([v,label])=>`<option value="${v}" ${S.progressSource === v ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label>Показник<select id="progress-metric">${[["weight", "Найбільша виконана вага"], ["volume", "Обсяг вправи"], ["performed", "Виконання вправи"], ["frequency", "Тренування за місяць"]].map(([v, label]) => `<option value="${v}" ${S.progressMetric === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
     <label>Період<select id="progress-period">${[["30", "30 днів"], ["90", "90 днів"], ["365", "Рік"], ["all", "Увесь час"]].map(([v, label]) => `<option value="${v}" ${S.progressPeriod === v ? "selected" : ""}>${label}</option>`).join("")}</select></label>
     ${S.progressMetric !== "frequency" ? `<label>Вправа<select id="progress-exercise">${items.size ? [...items].sort((a, b) => a[1].localeCompare(b[1], "uk")).map(([key, name]) => `<option value="${esc(key)}" ${S.progressExercise === key ? "selected" : ""}>${esc(name)}</option>`).join("") : '<option value="">Ще немає результатів</option>'}</select></label>` : ""}</div>
+    ${S.progressMetric !== "frequency" ? `<label>Профіль тренувань<select id="progress-machine"><option value="*">Усі профілі</option>${machineOptions.map(machine=>`<option value="${esc(machine)}" ${S.progressMachine === machine ? 'selected' : ''}>${esc(profileLabel(machine,S.trainingProfiles))}</option>`).join('')}</select></label>` : ''}
+    <p class="small muted">Для приблизних повторень обсяг рахується за нижньою межею. Вага на руку / сторону множиться на вибрану кількість; графік ваги показує сумарне навантаження.</p>
     <p class="small muted">${S.progressMetric === "performed" ? "Кількість виконань вправи за день: один раз за тренування або за ручний запис. Враховуються й позначки виконання без ваги." : S.progressMetric === "volume" ? "Сума ваги × повторень у виконаних підходах за день." : S.progressMetric === "frequency" ? "Кількість завершених тренувань за місяць у вибраному періоді. Ручні записи не враховуються." : "Найбільша вага у виконаному підході за день. Для тренувань без записаної ваги обери «Виконання вправи»."}</p>
     ${points.length ? progressChart(points, units[S.progressMetric]) : '<p class="muted">Немає результатів за вибраний період.</p>'}
+    ${progressHistory(analytics)}
     ${manualSetsPanel(items)}
   </section>`;
 }
@@ -1659,9 +1642,9 @@ function manualSetsPanel(items = new Map()) {
   const recent = [...S.manualSets].sort((a,b)=>String(b.date).localeCompare(String(a.date)) || Number(b.createdAt||0)-Number(a.createdAt||0)).slice(0,12);
   return `<div class="manual-sets"><div class="manual-set-entry"><div><span class="private-label">Бачиш тільки ти</span><h3>Записати підхід</h3><p class="small muted">Для підходу поза запущеним тренуванням.</p></div><form id="manual-set-form">
     <label>Вправа<input name="exercise" list="manual-exercises" maxlength="100" required autocomplete="off" placeholder="Наприклад, тяга" /></label><datalist id="manual-exercises">${options.map(name=>`<option value="${esc(name)}"></option>`).join('')}</datalist>
-    <div class="formgrid"><label>Вага, кг<input name="weight" type="number" min="0" max="1000" step="0.25" inputmode="decimal" required /></label><label>Повторення<input name="reps" type="number" min="1" max="1000" step="1" inputmode="numeric" required /></label><label>Дата<input name="date" type="date" max="${localDate()}" value="${localDate()}" required /></label></div>
+    <div class="formgrid"><label>Вага, кг<input name="weight" type="number" min="0" max="1000" step="0.25" inputmode="decimal" required /></label><label>Повторення<input name="reps" type="text" maxlength="12" placeholder="10 або 10-12" required /></label>${weightDetailsFields()}${trainingContextField('machine',profileContext(S.activeTrainingProfileId))}<label>Дата<input name="date" type="date" max="${localDate()}" value="${localDate()}" required /></label></div>
     <button class="btn" type="submit">Зберегти підхід</button><div class="form-error" role="alert"></div></form></div>
-    <div class="manual-set-history"><div class="sectionhead"><div><h3>Останні підходи</h3><p class="small muted">Ручні записи враховуються у графіку та рекордах, але не в серії тренувань.</p></div></div>${S.manualSetsError?'<p class="error" role="alert">Не вдалося завантажити ручні підходи.</p>':''}${recent.length?recent.map(entry=>`<div class="manual-set-row"><div><strong>${esc(entry.exercise)}</strong><small>${esc(entry.date)}</small></div><span>${Number(entry.weight).toLocaleString('uk-UA')} кг × ${entry.reps}</span>${btn('Видалити','delete-manual-set',`data-id="${esc(entry.id)}" data-name="${esc(entry.exercise)}"`,'ghost')}</div>`).join(''):'<p class="muted">Тут з’являться підходи, які ти запишеш вручну.</p>'}</div></div>`;
+    <div class="manual-set-history"><div class="sectionhead"><div><h3>Останні підходи</h3><p class="small muted">Ручні записи враховуються у графіку та рекордах, але не в серії тренувань.</p></div></div>${S.manualSetsError?'<p class="error" role="alert">Не вдалося завантажити ручні підходи.</p>':''}${recent.length?recent.map(entry=>`<div class="manual-set-row"><div><strong>${esc(entry.exercise)}</strong><small>${esc(entry.date)} · ${esc(profileLabel(entry.machine,S.trainingProfiles))}</small></div><span>${esc(weightLabel(entry))} × ${repsLabel(entry)}</span>${btn('Змінити','edit-manual-set',`data-id="${esc(entry.id)}"`,'ghost')}${btn('Видалити','delete-manual-set',`data-id="${esc(entry.id)}" data-name="${esc(entry.exercise)}"`,'ghost')}</div>`).join(''):'<p class="muted">Тут з’являться підходи, які ти запишеш вручну.</p>'}</div></div>`;
 }
 function manualExerciseKey(name) {
   const normalized=String(name).trim().toLocaleLowerCase('uk');
@@ -1720,7 +1703,7 @@ function historyEditForm(s) {
     ${field("Назва", "name", s.name, "text", 'required maxlength="100"')}
     <div class="formgrid">${field("Дата", "date", s.date, "date", `required max="${localDate()}"`)}${field("Тривалість, хв", "minutes", Math.round((s.endedAt - s.startedAt) / 60000), "number", 'required min="0" max="1440"')}</div>
     <label>Опис<textarea name="description" rows="3" maxlength="4000">${esc(s.description || "")}</textarea></label>
-    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · ${setLogLabel(s.logs, k)}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, l.reps, "number", 'required min="0" max="1000"')}${field("Вага: кг або плитки", `log-weight-${k}`, l.weightText || l.weight, "text", 'required maxlength="30"')}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
+    ${s.logs.map((l, k) => `<fieldset class="performance-entry"><legend>${esc(s.items[l.index].name)} · ${setLogLabel(s.logs, k)}</legend><div class="formgrid">${field("Повторення", `log-reps-${k}`, repsLabel(l), "text", 'required maxlength="12" placeholder="10-12"')}${field("Вага: кг або плитки", `log-weight-${k}`, l.weightText || l.weight, "text", 'required maxlength="30"')}${trainingContextField(`log-machine-${k}`,l.machine || "")}${weightDetailsFields(l,`log-${k}-`)}${field("Час, сек", `log-seconds-${k}`, l.seconds || 0, "number", 'required min="0" max="7200"')}${(l.metrics || []).map((m, j) => field(`${m.name} ${m.unit}`, `log-metric-${k}-${j}`, m.value, "text", 'required maxlength="80"')).join("")}</div></fieldset>`).join("")}
     <div class="actions"><button type="submit" class="btn">Зберегти виправлення</button>${btn("Скасувати", "close", 'type="button"', "ghost")}</div><div class="form-error" role="alert"></div></form>`);
 }
 function restorePreview() {
@@ -1738,7 +1721,7 @@ function recordsCard(records = personalRecords(progressSessions(S.sessions,S.man
   const unavailable=S.people?.warnings?.includes('видимість рекордів');
   return `<section class="card personal-records" ${own?'id="personal-records"':''}><h2>🏆 Особисті рекорди ${privateProfileBadge('records')}</h2><p class="small muted">Найкраща робоча вага та повторення з нею у завершених тренуваннях.${own?' Обери, які рекорди показувати іншим. Вибір зберігається для вправи, навіть коли її рекорд оновиться.':''}</p>${own&&!enabled?'<p class="small muted">Зараз розділ приховано. «Показати іншим» увімкне показ вибраних рекордів.</p>':''}${unavailable?'<p class="small error" role="alert">Не вдалося завантажити видимість рекордів. Онови профіль, перш ніж змінювати її.</p>':''}${records.length?records.map(record=>{
     const shared=enabled&&selected.has(record.key);
-    return `<div class="record-row" data-record-key="${esc(record.key)}"><div class="record-name"><strong>${esc(record.name)}</strong>${own?`<span class="${shared?'record-public-label':'private-label'}">${shared?'Показано іншим':'Бачиш тільки ти'}</span>`:''}</div><span class="record-result">${record.weight} кг × ${record.reps}<small>${esc(record.date)}</small></span>${own?btn(shared?'Сховати':'Показати іншим','toggle-record-visibility',`data-key="${esc(record.key)}" data-visible="${!shared}" aria-pressed="${shared}" ${unavailable?'disabled':''}`,shared?'ghost':'secondary'):''}</div>`;
+    return `<div class="record-row" data-record-key="${esc(record.key)}"><div class="record-name"><strong>${esc(record.name)}</strong>${own?`<span class="${shared?'record-public-label':'private-label'}">${shared?'Показано іншим':'Бачиш тільки ти'}</span>`:''}</div><span class="record-result">${esc(weightLabel(record))} × ${repsLabel(record)}<small>${esc(record.date)}</small></span>${own?btn(shared?'Сховати':'Показати іншим','toggle-record-visibility',`data-key="${esc(record.key)}" data-visible="${!shared}" aria-pressed="${shared}" ${unavailable?'disabled':''}`,shared?'ghost':'secondary'):''}</div>`;
   }).join(''):'<p class="muted">Збережи перше тренування з робочими підходами — тут з’являться твої рекорди.</p>'}</section>`;
 }
 const profileUid = () => {
@@ -1790,7 +1773,7 @@ async function loadPeople({ ensure = true, isCurrent, onIdentity } = {}) {
     const publicPeers = publicFriends.map((r)=>r.from === uid ? r.to : r.from);
     const peers = [...new Set([...publicPeers, ...relations.map((r) => r.from === userId ? r.to : r.from), ...comments.map((c) => c.authorId)])];
     const profiles = Object.fromEntries(await Promise.all(peers.map(async (id) => [id, await optional('автори й друзі', () => db.publicIdentity(id), null)])));
-    const stats = uid===userId?{...profileSnapshots(S.sessions,null,S.manualSets),lastActive:{at:S.profile?.lastActiveAt||Date.now()}}:{};
+    const stats = uid===userId?{...profileSnapshots(S.sessions,null,S.manualSets,person,S.programs),lastActive:{at:S.profile?.lastActiveAt||Date.now()}}:{};
     if (uid !== userId && person && !person.restricted) await Promise.all(Object.entries(profileVisibility(person)).map(async ([key, visible]) => {
       if (visible && !['gymBros','activity','workouts'].includes(key)) try { stats[key] = await db.getLive(`publicProfiles/${uid}/stats/${key}`); }
       catch (error) { if (error.code !== 'permission-denied') throw error; }
@@ -1900,7 +1883,7 @@ function commentsPanel() {
 function resumeReminder() {
   const session = S.loaded && ongoing();
   if (!session || ['session','home','editor'].includes(S.route)) return '';
-  return `<section class="resume-reminder"><div><strong>Незавершене тренування: ${esc(session.name)}</strong><p class="small muted">${session.logs.length} записаних підходів · ${esc(session.date)}</p></div>${btn('Продовжити тренування','resume','','secondary')}</section>`;
+  return `<section class="resume-reminder"><div><strong>Незавершене тренування: ${esc(session.name)}</strong><p class="small muted">${session.logs.filter(isWorkingSet).length} основних підходів · ${session.logs.filter(log=>log.dropOf !== undefined).length} дропів · ${esc(session.date)}</p></div>${btn('Продовжити тренування','resume','','secondary')}</section>`;
 }
 function captureSetInputs() {
   const form = document.querySelector('#set-form'), session = ongoing();
@@ -1913,6 +1896,7 @@ function restoreSetInputs() {
   if (!form || !session) return;
   const fields = loadSetDraft(localStorage, S.user.uid, session);
   if (fields) for (const [key,value] of Object.entries(fields)) if (form.elements[key]) form.elements[key].value = value;
+  updateWeightDetailsFields(form);
 }
 async function loadSafety(isCurrent = () => true) {
   const blocked = await db.blockedUsers();
@@ -2014,7 +1998,7 @@ function profile() {
   const sessionById=new Map(S.sessions.map(session=>[session.id,session]));
   const blockViews={
     medals:()=>achievementShowcase(S.people.achievementShowcase,{own}),stats:sharedStats,comments:commentsPanel,
-    goals:()=>own?weeklyGoalCard(S.sessions,S.weeklyGoals,localDate())+activityCalendar(S.sessions,S.programs,S.activityYear,S.activityFilter,localDate(),S.calendarDate):'',
+    goals:()=>own?weeklyGoalCard(S.sessions,S.weeklyGoals,localDate())+activityCalendar(S.sessions,S.programs,S.activityYear,S.activityFilter,localDate(),S.calendarDate):calendarSharing(person).visible?sharedActivityCalendar(S.people.stats?.calendar,S.publicActivityYear,localDate()):'',
     challenges:()=>own?challengesCard(S.challenges,S.user.uid,localDate())+meetingPollsCard(S.meetingPolls,S.user.uid):'',
     records:()=>own?recordsCard()+repetitionRecordsCard(progressSessions(S.sessions,S.manualSets),S.recordReps,localDate()):S.people.stats?.records?recordsCard(S.people.stats.records.items||[]):'',progress:()=>own?`<div id="progress-view">${progressView()}</div>`:'',
     measurements:()=>own?`<div id="measurements-view">${measurementsPanel()}</div>`:'',
@@ -2034,7 +2018,7 @@ function settings() {
   if (S.settingsSection === 'appearance' && !owner() && !S.customizationAccess) S.settingsSection = 'user';
   return heading('Налаштування', 'Профіль, приватність і твій застосунок.', btn('До профілю', 'route', 'data-id="profile"', 'secondary')) + `<div class="settings-layout"><nav class="settings-sections" aria-label="Розділи налаштувань">${[['user','Користувач'],...(owner()||S.customizationAccess ? [['appearance','Оформлення']] : []),['privacy','Конфіденційність'],['security','Безпека']].map(([key,label])=>btn(label,'settings-section',`data-section="${key}" aria-pressed="${S.settingsSection === key}"`,'ghost')).join('')}</nav><div data-settings-section="user" ${S.settingsSection === 'user' ? '' : 'hidden'}><section class="card"><div class="sectionhead"><h2>Твій профіль</h2>${personAvatar(person)}</div><form id="profile-name-form"><label>Ім’я у профілі<input name="name" value="${esc(person.name || S.profile?.name || '')}" required maxlength="100" autocomplete="nickname"/></label><p class="small muted">Це ім’я бачать інші учасники.</p><button type="submit" class="btn secondary">Зберегти ім’я</button><div class="form-error" role="alert"></div></form><form id="location-form"><label>Місцеположення<input name="location" value="${esc(person.location || '')}" maxlength="100" placeholder="" /></label><p class="small muted">Відображається у профілі. Залиш порожнім, щоб не вказувати.</p><button class="btn secondary" type="submit">Зберегти місцеположення</button><div class="form-error" role="alert"></div></form><form id="bio-form"><h3>Про себе</h3>${richComposer({name:'bio',maxLength:400,htmlLimit:8000,draft:{text:person.bio||'',html:person.bioRich||''},placeholder:'Кілька слів про тебе й твою мету'})}<button class="btn secondary" type="submit">Зберегти опис</button><div class="form-error" role="alert"></div></form><form id="avatar-form"><label>Аватар<input name="avatar" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Фото буде обрізано до квадрата.</p><div class="actions"><button type="submit" class="btn secondary">Завантажити аватар</button>${person.photo ? btn('Прибрати аватар','remove-avatar','type="button"','ghost') : ''}</div><div class="form-error" role="alert"></div></form><form id="banner-form"><h3>Банер профілю</h3>${bannerSource(person.banner) ? `<img class="banner-preview" src="${esc(person.banner)}" alt="Твій банер" />` : ''}<label>Зображення банера<input name="banner" type="file" accept="image/jpeg,image/png,image/webp" required /></label><p class="small muted">JPG, PNG або WebP до 10 МБ. Прозорий фон PNG/WebP зберігається. Широкий формат 1200 × 320.</p><div class="actions"><button type="submit" class="btn secondary">Завантажити банер</button>${person.banner ? btn('Прибрати банер','remove-banner','type="button"','ghost') : ''}</div><div class="form-error" role="alert"></div></form></section>${contactsEditor()}        <section class="card"><h2>Вигляд</h2><label>Тема<select id="theme-select">${options(["Світла", "Темна", "Системна"], themePreference)}</select></label></section>
         <section class="card"><h2>Сповіщення таймера</h2>${soundControls()}</section>
-</div><div data-settings-section="appearance" ${S.settingsSection === 'appearance' ? '' : 'hidden'}>${profileAppearanceEditor()}</div><div data-settings-section="privacy" ${S.settingsSection === 'privacy' ? '' : 'hidden'}><section class="card profile-privacy-control"><h2>Доступ до профілю</h2><form id="profile-privacy-form"><label class="visibility-row"><div><strong>Закритий профіль</strong><span>Лише друзі бачать інформацію, активність і коментарі. Ім’я, аватар та ID залишаються видимими.</span></div><input type="checkbox" name="isPrivate" ${person.isPrivate?'checked':''}/></label><button type="submit" class="btn">Зберегти доступ до профілю</button><div class="form-error" role="alert"></div></form></section><section class="card"><h2>Що бачать інші</h2><p class="muted small">Обирай, чим ділитися у профілі. Приховані дані доступні тобі в особистому просторі.</p><form id="visibility-form">${[['activity','Стрічка активності','Коментарі, відповіді, оцінки та реакції'],['workouts','Тренування в активності','Показувати завершені тренування у відкритій стрічці'],['lastActive','Був(-ла) у застосунку','Коли ти востаннє користувався застосунком'],['progress','Прогрес','Кількість тренувань, підходів і загальна вага'],['records','Особисті рекорди','Показувати розділ; окремі рекорди обираються у профілі'],['streak','Серія тренувань','Кількість тижнів поспіль'],['gymBros','Gym Bro','Показувати список твоїх друзів у профілі']].map(([key,title,description])=>`<label class="visibility-row"><div><strong>${title}</strong><span>${description}</span></div><input type="checkbox" name="${key}" ${visibility[key] ? 'checked' : ''} /></label>`).join('')}<button class="btn" type="submit">Зберегти видимість</button><div class="form-error" role="alert"></div></form></section>${blockedPanel()}
+</div><div data-settings-section="appearance" ${S.settingsSection === 'appearance' ? '' : 'hidden'}>${profileAppearanceEditor()}</div><div data-settings-section="privacy" ${S.settingsSection === 'privacy' ? '' : 'hidden'}><section class="card profile-privacy-control"><h2>Доступ до профілю</h2><form id="profile-privacy-form"><label class="visibility-row"><div><strong>Закритий профіль</strong><span>Лише друзі бачать інформацію, активність і коментарі. Ім’я, аватар та ID залишаються видимими.</span></div><input type="checkbox" name="isPrivate" ${person.isPrivate?'checked':''}/></label><button type="submit" class="btn">Зберегти доступ до профілю</button><div class="form-error" role="alert"></div></form></section><section class="card"><h2>Що бачать інші</h2><p class="muted small">Обирай, чим ділитися у профілі. Приховані дані доступні тобі в особистому просторі.</p><form id="visibility-form">${[['activity','Стрічка активності','Коментарі, відповіді, оцінки та реакції'],['workouts','Тренування в активності','Показувати завершені тренування у відкритій стрічці'],['lastActive','Був(-ла) у застосунку','Коли ти востаннє користувався застосунком'],['progress','Прогрес','Кількість тренувань, підходів і загальна вага'],['records','Особисті рекорди','Показувати розділ; окремі рекорди обираються у профілі'],['streak','Серія тренувань','Кількість тижнів поспіль'],['gymBros','Gym Bro','Показувати список твоїх друзів у профілі'],['calendar','Календар активності','Показувати іншим дати й кількість завершених тренувань']].map(([key,title,description])=>`<label class="visibility-row"><div><strong>${title}</strong><span>${description}</span></div><input type="checkbox" name="${key}" ${visibility[key] ? 'checked' : ''} /></label>`).join('')}<fieldset class="calendar-privacy-types"><legend>Календар активності: які тренування показувати</legend><label>Типи тренувань<select name="calendarScope">${Object.entries(calendarScopeLabels).map(([value,title])=>`<option value="${value}" ${calendarSharing(person).scope === value?'selected':''}>${title}</option>`).join('')}</select></label><p class="small muted">Цей вибір діє, коли календар показано іншим. Приховані типи не потраплять у спільний календар. Власний повний календар залишиться доступним.</p></fieldset><button class="btn" type="submit">Зберегти видимість</button><div class="form-error" role="alert"></div></form></section>${blockedPanel()}
 </div><div data-settings-section="security" ${S.settingsSection === 'security' ? '' : 'hidden'}><section class="card"><h2>Безпека акаунта</h2><p class="muted">${esc(S.user.email)}</p><dl class="user-facts"><div><dt>Останній вхід</dt><dd>${displayDate(S.profile?.lastLoginTime)}</dd></div></dl><p class="small muted">Для зміни пароля надішлемо лист на твою пошту.</p>${btn('Змінити пароль','account-password-reset','','secondary')}</section>        <section class="card"><h2>Експорт даних</h2><p class="muted small">JSON містить програми, тренування, особисті вправи, налаштування та приватні заміри тіла. CSV містить плани програм, заплановані тренування й виконані підходи.</p><div class="actions">${btn("Завантажити JSON", "export-json", "", "secondary")}${btn("Завантажити CSV", "export-csv", "", "secondary")}</div></section>
         <section class="card"><h2>Відновлення з JSON</h2><p class="muted small">Обери резервну копію, яку завантажив із профілю. Перед збереженням буде показано кількість записів.</p><form id="restore-form"><label>Резервна копія JSON<input type="file" id="restore-file" accept=".json,application/json" required /></label><button class="btn secondary" type="submit">Перевірити копію</button><div class="form-error" role="alert"></div></form></section>
 <section class="card"><h2>Акаунт</h2><p class="muted">${esc(S.user.email)}</p>${btn('Вийти', 'logout', '', 'ghost')}</section></div></div>`;
@@ -2222,13 +2206,13 @@ let resultCardPages=[];
 async function openResultCard(id) {
   const session=S.sessions.find(s=>s.id===id&&s.status==='completed');if(!session)throw Error('Тренування не знайдено.');
   const {renderResultCard}=await import('./result-card.js');
-  const pages=await renderResultCard(session,S.sessions);resultCardPages=pages;
+  const pages=await renderResultCard(session,S.sessions,S.trainingProfiles);resultCardPages=pages;
   openModal(`<div class="sectionhead"><h2 id="result-card-title">Картка результатів</h2>${btn('Закрити','close','','ghost')}</div><p class="small muted">${pages.length} стор. · Файли створюються на твоєму пристрої.</p><div class="actions">${btn('Завантажити PNG','download-result',`data-format="png" data-date="${esc(session.date)}"`)}${btn('Завантажити PDF','download-result',`data-format="pdf" data-date="${esc(session.date)}"`,'secondary')}</div><div class="result-card-preview" aria-label="Попередній перегляд картки"></div>`,'result-card-title','result-card-dialog');
   modal.querySelector('.result-card-preview').append(...pages);
 }
 function summaryScreen(session) {
   const stats=workoutSummary(session,S.sessions);
-  return `<div class="workout-summary">${S.trainingExtrasError?`<div class="notice error">${esc(S.trainingExtrasError)}</div>`:''}${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`,btn('Змінити дані тренування','edit-history',`data-id="${esc(session.id)}"`,'secondary'))}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Результати тренування'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">Обсяг — за записаними підходами, без дублювання найкращих результатів.</p><p class="small muted">${stats.quickResults ? `${stats.quickResults} найкращих результатів · ` : ''}${stats.reps} повторень · ${stats.warmupSets} розминочних підходів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section><section class="card result-export"><div><span class="private-label">Твій прогрес у файлі</span><h2>Картка результатів</h2><p class="small muted">Вправи, підходи, час і рекорди. Особисті нотатки та самопочуття не включаються.</p></div>${btn('Перегляд і завантаження','result-card',`data-id="${esc(session.id)}"`,'secondary')}</section>${comparisonCard(session,S.sessions,S.comparisonIds[session.id]||'')}${reflectionCard(session,S.reflections.find(r=>r.id===session.id))}${stats.repetitionRecords.length?`<section class="card summary-repetition-records"><h2>Рекорди за повтореннями</h2>${stats.repetitionRecords.map(r=>`<div class="record-row"><strong>${esc(r.name)}</strong><span>${r.weight} кг × ${r.reps}<small>${r.first?'Перший результат':'Новий рекорд'}</small></span></div>`).join('')}</section>`:''}<section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${r.weight} кг × ${r.reps}</span></div>`).join('') : '<p class="muted">Нових рекордів немає.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
+  return `<div class="workout-summary">${S.trainingExtrasError?`<div class="notice error">${esc(S.trainingExtrasError)}</div>`:''}${heading('Тренування завершено',`${esc(session.name)} · ${esc(session.date)}`,btn('Змінити дані тренування','edit-history',`data-id="${esc(session.id)}"`,'secondary'))}<section class="card summary-hero"><span class="summary-check" aria-hidden="true">✓</span><h2>${session.endedEarly ? 'Збережено все, що ти виконав' : 'Результати тренування'}</h2>${session.endedEarly ? '<span class="badge">Завершено достроково</span>' : ''}<div class="summary-metrics">${[[stats.minutes,'Хвилин'],[stats.sets,'Робочих підходів'],[Math.round(stats.volume*100)/100,'кг × повторення'],[stats.exercises,'Вправ виконано']].map(([value,label])=>`<div><strong>${Number(value).toLocaleString('uk-UA')}</strong><span>${label}</span></div>`).join('')}</div><p class="small muted">Обсяг враховує вибрану кількість рук / сторін, без дублювання найкращих результатів; для діапазонів повторень — за нижньою межею.</p><p class="small muted">${stats.quickResults ? `${stats.quickResults} найкращих результатів · ` : ''}${stats.reps} повторень · ${stats.warmupSets} розминочних підходів · ${stats.dropSets} дропів · ${stats.superSets} суперсетів${stats.plannedSets ? ` · ${stats.sets} із ${stats.plannedSets} запланованих робочих підходів` : ''}</p></section>${nextWeightsSummary(session)}<section class="card result-export"><div><span class="private-label">Твій прогрес у файлі</span><h2>Картка результатів</h2><p class="small muted">Вправи, підходи, час і рекорди. Особисті нотатки та самопочуття не включаються.</p></div>${btn('Перегляд і завантаження','result-card',`data-id="${esc(session.id)}"`,'secondary')}</section>${comparisonCard(session,S.sessions,S.comparisonIds[session.id]||'')}${reflectionCard(session,S.reflections.find(r=>r.id===session.id))}${stats.repetitionRecords.length?`<section class="card summary-repetition-records"><h2>Рекорди за повтореннями</h2>${stats.repetitionRecords.map(r=>`<div class="record-row"><strong>${esc(r.name)}</strong><span>${esc(weightLabel(r))} × ${repsLabel(r)}<small>${r.first?'Перший результат':'Новий рекорд'}</small></span></div>`).join('')}</section>`:''}<section class="card"><h2>🏆 Нові рекорди</h2>${stats.records.length ? stats.records.map((r)=>`<div class="record-row"><div><strong>${esc(r.name)}</strong><p class="small muted">${r.first ? 'Перший результат для цієї вправи' : 'Перевершено попередній результат'}</p></div><span>${esc(weightLabel(r))} × ${repsLabel(r)}</span></div>`).join('') : '<p class="muted">Нових рекордів немає.</p>'}</section>${session.description || session.warmup ? `<section class="card"><h2>План тренування</h2>${workoutDescription(session)}</section>` : ''}<div class="actions">${btn('На головну','route','data-id="home"')}${btn('Історія та прогрес','route','data-id="profile"','secondary')}${btn('Деталі тренування','history',`data-id="${esc(session.id)}"`,'ghost')}</div></div>`;
 }
 function editMeasurement(id = '') {
   const record=S.measurements.find((m)=>m.id===id);
@@ -2250,34 +2234,65 @@ function measurementChart(points,unit) {
 function lastDate(points) { return points.at(-1).date; }
 
 function workoutHeader(s) {
-  const done = s.items.filter((item,index) => s.simpleCompleted?.includes(index) || s.logs.filter(log => log.index === index && !log.warmup && !log.quickResult).length >= item.sets).length;
+  const done = s.items.filter((item,index) => s.simpleCompleted?.includes(index) || s.logs.filter(log => log.index === index && isWorkingSet(log)).length >= item.sets).length;
   const percent = s.items.length ? Math.round(done / s.items.length * 100) : 0;
-  return `<header class="workout-heading"><div><span class="workout-live"><i></i> Тренування триває</span><h1>${esc(s.name)}</h1><p>${done} із ${s.items.length} вправ виконано <span>·</span> ${s.logs.filter(log => !log.warmup && !log.quickResult).length} підходів</p></div><div class="workout-header-actions">${btn('Згорнути','route','data-id="home"','ghost')}${btn('Завершити достроково','finish-early','','secondary')}</div><div class="workout-progress" role="progressbar" aria-label="Виконані вправи" aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent}%"></span></div></header>`;
+  return `<header class="workout-heading"><div><span class="workout-live"><i></i> Тренування триває</span><h1>${esc(s.name)}</h1><p>${done} із ${s.items.length} вправ виконано <span>·</span> ${s.logs.filter(log => isWorkingSet(log)).length} підходів</p></div><div class="workout-header-actions">${btn('Згорнути','route','data-id="home"','ghost')}${btn('Завершити достроково','finish-early','','secondary')}</div><div class="workout-progress" role="progressbar" aria-label="Виконані вправи" aria-valuenow="${percent}" aria-valuemin="0" aria-valuemax="100"><span style="width:${percent}%"></span></div></header>`;
 }
 function executionControls(s) {
   return `<div class="execution-controls"><label><span>Режим виконання</span><select id="execution-mode">${[['simple','Простий'],['advanced','Розширений'],['mixed','Змішаний']].map(([key,label]) => `<option value="${key}" ${(s.executionMode || 'advanced') === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label><details class="workout-settings"><summary>Налаштування</summary><div><p class="small muted">Простий — позначай вправи. Розширений — записуй підходи. Змішаний — обирай для кожної вправи. Режим зберігається для наступних тренувань.</p>${soundControls()}</div></details></div>`;
 }
 function workoutOutline(s) {
   return `<aside class="workout-outline card"><div class="workout-section-label">Твій план <span>${s.items.length} вправ</span></div><ol>${s.items.map((item,index) => {
-    const done = s.simpleCompleted?.includes(index) || s.logs.filter(log => log.index === index && !log.warmup && !log.quickResult).length >= item.sets;
+    const done = s.simpleCompleted?.includes(index) || s.logs.filter(log => log.index === index && isWorkingSet(log)).length >= item.sets;
     return `<li class="${done ? 'is-done' : index === s.index ? 'is-current' : ''}"><span>${done ? '✓' : index+1}</span><div><strong>${esc(item.name)}</strong><small>${item.sets} підх. · ${item.seconds ? `${item.seconds} сек` : `${esc(item.reps)} повт.`}</small></div>${index === s.index && !done ? '<i aria-label="Поточна вправа"></i>' : ''}</li>`;
   }).join('')}</ol></aside>`;
 }
 function workoutInput(name, title, value, step) {
-  return `<div class="workout-input"><label for="set-${name}">${title}</label><div><button type="button" data-action="adjust-set" data-field="${name}" data-delta="-${step}" aria-label="Зменшити ${name === 'weight' ? 'вагу' : 'повторення'}">−</button><input id="set-${name}" name="${name}" type="${name === 'reps' ? 'number' : 'text'}" inputmode="${name === 'reps' ? 'numeric' : 'decimal'}" value="${esc(value)}" ${name === 'reps' ? 'min="0" max="1000"' : 'maxlength="30"'} required aria-describedby="set-format"/><button type="button" data-action="adjust-set" data-field="${name}" data-delta="${step}" aria-label="Збільшити ${name === 'weight' ? 'вагу' : 'повторення'}">+</button></div></div>`;
+  return `<div class="workout-input"><label for="set-${name}">${title}</label><div><button type="button" data-action="adjust-set" data-field="${name}" data-delta="-${step}" aria-label="Зменшити ${name === 'weight' ? 'вагу' : 'повторення'}">−</button><input id="set-${name}" name="${name}" type="text" inputmode="text" value="${esc(value)}" ${name === 'reps' ? 'maxlength="12" placeholder="10-12"' : 'maxlength="30"'} required aria-describedby="set-format"/><button type="button" data-action="adjust-set" data-field="${name}" data-delta="${step}" aria-label="Збільшити ${name === 'weight' ? 'вагу' : 'повторення'}">+</button></div></div>`;
 }
 function workoutSets(s,item) {
-  const logs = s.logs.filter(log => log.index === s.index && !log.warmup && !log.quickResult);
-  return `<div class="workout-sets"><div class="workout-section-label">Підходи <span>${logs.length} / ${item.sets}</span></div><table><caption class="visually-hidden">Результати поточної вправи</caption><thead><tr><th>Підхід</th><th>Вага</th><th>Повторення</th><th><span class="visually-hidden">Стан</span></th></tr></thead><tbody>${Array.from({length:item.sets},(_,index) => {
-    const log = logs[index], plan = setPlan(item,index);
-    return `<tr class="${log ? 'is-done' : index === logs.length ? 'is-current' : ''}"><th scope="row">${index+1}</th><td>${log ? esc(weightLabel(log)) : `${plan.weight || 0} кг`}</td><td>${log ? log.reps : esc(plan.reps)}</td><td>${log ? '<span class="set-check" aria-label="Виконано">✓</span>' : index === logs.length ? '<span class="set-now">Зараз</span>' : '<span class="muted">—</span>'}</td></tr>`;
-  }).join('')}</tbody></table></div>`;
+  const logs=s.logs.filter(log=>log.index === s.index && isWorkingSet(log));
+  return `<div class="workout-sets"><div class="workout-section-label">Підходи <span>${logs.length} / ${item.sets}</span></div><table><caption class="visually-hidden">Результати поточної вправи</caption><thead><tr><th>Підхід</th><th>Вага</th><th>Повторення</th><th>Дії</th></tr></thead><tbody>${Array.from({length:item.sets},(_,index)=>{
+    const log=logs[index],plan=setPlan(item,index),parent=log ? s.logs.indexOf(log) : -1;
+    const drops=s.logs.filter(entry=>entry.dropOf === parent);
+    return `<tr class="${log ? 'is-done' : index === logs.length ? 'is-current' : ''}"><th scope="row">${index+1}</th><td>${log ? esc(weightLabel(log)) : esc(weightLabel({...item,...plan}))}</td><td>${log ? repsLabel(log) : esc(plan.reps)}</td><td>${log ? `${btn('＋ Дроп','add-drop-set',`data-log="${parent}" ${drops.length >= 5 || log.weightUnknown || log.weight <= 0 ? 'disabled' : ''}`,'ghost')}` : index === logs.length ? 'Зараз' : '—'}</td></tr>${drops.map((drop,k)=>`<tr class="drop-set-row"><th scope="row">↳ Дроп ${k+1}</th><td>${esc(weightLabel(drop))}</td><td>${repsLabel(drop)}</td><td>Продовження ${index+1}</td></tr>`).join('')}`;
+  }).join('')}</tbody></table><details class="workout-more"><summary>Що таке дропсет?</summary><p class="small muted">Після основного підходу зменшуєш вагу та продовжуєш ту саму вправу без звичайної паузи. Кожне зниження записується окремим дропом. Дропи додають обсяг, але не закривають заплановані підходи. Це необов’язковий спосіб запису.</p></details></div>`;
 }
+function recentDropAction(session) {
+  const parent=[...session.logs].reverse().find(isWorkingSet);
+  if (!parent || parent.index === session.index || parent.weightUnknown || parent.weight <= 0) return '';
+  const position=session.logs.indexOf(parent),drops=session.logs.filter(log=>log.dropOf === position);
+  return `<div class="notice recent-drop"><span class="small muted">Останній основний підхід: ${esc(session.items[parent.index].name)} · ${esc(weightLabel(parent))}</span>${btn('＋ Дроп до попередньої вправи','add-drop-set',`data-log="${position}" ${drops.length >= 5 ? 'disabled' : ''}`,'ghost')}</div>`;
+}
+function openDropSet(parentIndex) {
+  const session=ongoing(),parent=session?.logs[parentIndex];
+  if (!parent || !isWorkingSet(parent) || parent.weightUnknown || parent.weight <= 0) throw Error('Обери основний підхід із відомою вагою.');
+  const drops=session.logs.filter(log=>log.dropOf === parentIndex),previous=drops.at(-1)||parent;
+  if (drops.length >= 5) throw Error('До 5 знижень на основний підхід.');
+  openModal(`<h2>Записати дроп ${drops.length+1}</h2><p>${esc(session.items[parent.index].name)} · попередня вага ${esc(weightLabel(previous))}</p><p class="small muted">Дроп — продовження основного підходу зі зменшеною вагою. Вкажи фактичну вагу, меншу за ${previous.weight} кг, і виконані повторення.</p><form id="drop-set-form" data-session="${esc(session.id)}" data-parent="${parentIndex}" data-logs="${session.logs.length}"><div class="formgrid">${field('Вага: кг або плитки','weight','','text','required maxlength="30"')}${field('Повторення','reps','','text','required maxlength="12" placeholder="8 або 8-10"')}</div><button type="submit" class="btn">Зберегти дроп</button><div class="form-error" role="alert"></div></form>`);
+}
+function supersetNotice(session,index) {
+  const partner=supersetPartner(session.items,index);
+  if (partner < 0) return '';
+  return `<div class="notice superset-notice"><strong>Суперсет · ${esc(session.items[index].name)} + ${esc(session.items[partner].name)}</strong><p class="small muted">Виконуй по одному підходу кожної вправи поспіль. Під час обліку підходів після першої вправи запис перейде до другої; таймер відпочинку почнеться після обох.</p></div>`;
+}
+function weightSuggestionPanel(item,session,index,actionable=false) {
+  const suggestion=nextWeightSuggestion(S.sessions,item,{currentId:session.id,beforeDate:session.date});
+  if (!suggestion.weights.length) return `<p class="small muted weight-suggestion">Наступна вага: ${esc(suggestion.reason)}</p>`;
+  const position=Math.min(workingSetCount(session,index),item.sets-1),weight=suggestion.weights[position];
+  return `<details class="notice weight-suggestion" ${actionable ? 'open' : ''}><summary><strong>Підказка ваги · ${suggestion.status === 'increase' ? 'наступний крок' : 'залишити вагу'}</strong></summary><p>${suggestion.weights.map((value,k)=>`${k+1}: ${esc(weightLabel({...item,weight:value}))}`).join(' · ')}</p><p class="small muted">${esc(suggestion.reason)} Крок: ${suggestion.step} кг. За записами ${esc(suggestion.date)} у цьому профілі.</p>${actionable && workingSetCount(session,index) < item.sets ? btn(`Підставити ${weight} кг`,'apply-weight-suggestion','type="button"','secondary') : ''}<p class="small muted">Це підказка за журналом. Вагу обираєш і підтверджуєш самостійно.</p></details>`;
+}
+function nextWeightsSummary(session) {
+  const entries=session.items.map(item=>({item,suggestion:nextWeightSuggestion(S.sessions,item,{beforeDate:session.date,beforeEnd:session.endedAt})})).filter(entry=>entry.suggestion.weights.length);
+  if (!entries.length) return '';
+  return `<section class="card next-weight-summary"><h2>Вага на наступне тренування</h2><p class="small muted">Для того самого профілю тренувань. Збільшення пропонується, коли верхню ціль повторень підтверджено в усіх підходах. Вага не змінюється автоматично.</p>${entries.map(({item,suggestion})=>`<div class="next-weight-entry"><strong>${esc(item.name)} · ${esc(profileLabel(item.machine,S.trainingProfiles))}</strong><p>${suggestion.weights.map((value,k)=>`${k+1}: ${esc(weightLabel({...item,weight:value}))}`).join(' · ')}</p><p class="small muted">${esc(suggestion.reason)}</p></div>`).join('')}</section>`;
+}
+
 function checklistView(s) {
   return `<div class="session workout-studio">${workoutHeader(s)}${executionControls(s)}${workoutDescription(s)}<div class="workout-list-heading"><h2>Твої вправи</h2><span>Список тренування</span></div><div class="workout-checklist">${s.items.map((item,index) => {
-    const done = s.simpleCompleted?.includes(index) || s.logs.filter(l => l.index === index && !l.warmup && !l.quickResult).length >= item.sets;
+    const done = s.simpleCompleted?.includes(index) || s.logs.filter(l => l.index === index && isWorkingSet(l)).length >= item.sets;
     const logs = s.logs.filter(l => l.index === index);
-    return `<section class="card checklist-item ${done ? 'is-done' : ''}"><div class="checklist-title"><span class="exercise-number">${done ? '✓' : String(index+1).padStart(2,'0')}</span><div><span class="workout-section-label">${esc(item.primary || 'Тренування')}</span><h2>${esc(item.name)}</h2><p class="small muted">${item.sets} підходи · ${item.seconds ? `${item.seconds} сек` : `${esc(item.reps)} повторень`}${item.weight ? ` · ${item.weight} кг` : ''}</p></div></div>${item.note ? `<p class="small muted">${esc(item.note)}</p>` : ''}${replacementBanner(s,index)}${exerciseNotePanel(item,index)}${previousWeight(item,s)}${logs.length ? `<div class="checklist-results">${logs.map(l=>`<span>${l.quickResult ? 'Найкращий' : l.warmup ? 'Розминка' : 'Підхід'}: <strong>${esc(weightLabel(l))} × ${l.reps}</strong></span>`).join('')}</div>` : ''}<div class="checklist-actions">${btn(done ? '✓ Виконано' : 'Позначити виконаною','simple-done',`data-index="${index}" aria-pressed="${!!done}"`,done ? 'secondary' : '')}${s.executionMode === 'mixed' ? btn('Облік підходів','workout-detail',`data-index="${index}"`,'secondary') : btn('Записати результат','quick-result',`data-index="${index}"`,'secondary')}</div><details class="workout-more"><summary>Про вправу та результат</summary><div class="actions">${s.executionMode === 'mixed' ? btn('Записати результат','quick-result',`data-index="${index}"`,'ghost') : ''}${item.exerciseId ? btn('Як виконувати','detail',`data-id="${esc(item.exerciseId)}" data-session="1"`,'ghost') : ''}${!logs.length && !done ? btn('Замінити на сьогодні','workout-alternatives',`data-index="${index}"`,'ghost') : ''}</div></details></section>`;
+    return `<section class="card checklist-item ${done ? 'is-done' : ''}"><div class="checklist-title"><span class="exercise-number">${done ? '✓' : String(index+1).padStart(2,'0')}</span><div><span class="workout-section-label">${esc(item.primary || 'Тренування')}</span><h2>${esc(item.name)}</h2><p class="small muted">${item.sets} підходи · ${item.seconds ? `${item.seconds} сек` : `${esc(item.reps)} повторень`}${item.weight ? ` · ${item.weight} кг` : ''}</p></div></div>${item.note ? `<p class="small muted">${esc(item.note)}</p>` : ''}${workoutLoadButton(item,index)}${supersetNotice(s,index)}${weightSuggestionPanel(item,s,index)}${replacementBanner(s,index)}${exerciseNotePanel(item,index)}${previousWeight(item,s)}${logs.length ? `<div class="checklist-results">${logs.map(l=>`<span>${l.dropOf !== undefined ? 'Дроп' : l.quickResult ? 'Найкращий' : l.warmup ? 'Розминка' : 'Підхід'}: <strong>${esc(weightLabel(l))} × ${repsLabel(l)}</strong></span>`).join('')}</div>` : ''}<div class="checklist-actions">${btn(done ? '✓ Виконано' : 'Позначити виконаною','simple-done',`data-index="${index}" aria-pressed="${!!done}"`,done ? 'secondary' : '')}${s.executionMode === 'mixed' ? btn('Вага кожного підходу','workout-detail',`data-index="${index}"`,'secondary') : btn('Записати результат','quick-result',`data-index="${index}"`,'secondary')}</div><details class="workout-more"><summary>Про вправу та результат</summary><div class="actions">${s.executionMode === 'mixed' ? btn('Записати результат','quick-result',`data-index="${index}"`,'ghost') : ''}${item.exerciseId ? btn('Як виконувати','detail',`data-id="${esc(item.exerciseId)}" data-session="1"`,'ghost') : ''}${!logs.length && !done ? btn('Замінити на сьогодні','workout-alternatives',`data-index="${index}"`,'ghost') : ''}</div></details></section>`;
   }).join('')}</div><div class="workout-finish">${btn('✓ Завершити тренування','finish-checklist','','wide')}<p>Усе виконане залишиться в історії</p></div></div>`;
 }
 
@@ -2322,9 +2337,9 @@ function exerciseProgress(id) {
   const e = S.exercises.find(e=>e.id===id);
   if (!e) throw Error('Вправу не знайдено.');
   const item = {exerciseId:id,name:e.name}, analytics=progressSessions(S.sessions,S.manualSets);
-  const matches = analytics.filter(s=>s.status==='completed').flatMap(s=>s.logs.filter(l=>!l.warmup && s.items[l.index] && exerciseKey(s.items[l.index])===exerciseKey(item)).map(log=>({date:s.date,at:log.at || s.endedAt || 0,log}))).sort((a,b)=>b.date.localeCompare(a.date)||b.at-a.at);
-  const record=personalRecords(analytics).find(r=>r.key===id), points=progressSeries(analytics,{key:id});
-  openModal(`<h2>Мій прогрес · ${esc(e.name)}</h2><span class="private-label">Бачиш тільки ти</span>${matches.length ? `<p>Останній результат: <strong>${esc(weightLabel(matches[0].log))} × ${matches[0].log.reps}</strong> · ${esc(matches[0].date)}</p>` : '<p class="muted">Ще немає записаних результатів для цієї вправи.</p>'}${record ? `<p class="record-badge">🏆 Рекорд: ${record.weight} кг × ${record.reps}</p>` : ''}${points.length ? progressChart(points,'кг') : ''}<p class="small muted">Графік показує найбільшу відому вагу за день. Записи з невідомою вагою залишаються в історії нижче.</p>${matches.slice(0,20).map(({date,log})=>`<p>${esc(date)} · ${esc(weightLabel(log))} × ${log.reps}</p>`).join('')}`);
+  const matches = analytics.filter(s=>s.status==='completed').flatMap(s=>s.logs.filter(l=>!l.warmup && sameMachine(l,profileContext(S.activeTrainingProfileId)) && s.items[l.index] && exerciseKey(s.items[l.index])===exerciseKey(item)).map(log=>({date:s.date,at:log.at || s.endedAt || 0,log}))).sort((a,b)=>b.date.localeCompare(a.date)||b.at-a.at);
+  const record=personalRecords(analytics,profileContext(S.activeTrainingProfileId)).find(r=>r.key===id), points=progressSeries(analytics,{key:id,machine:profileContext(S.activeTrainingProfileId)});
+  openModal(`<p class="small muted">Профіль: ${esc(profileLabel(profileContext(S.activeTrainingProfileId),S.trainingProfiles))}</p><h2>Мій прогрес · ${esc(e.name)}</h2><span class="private-label">Бачиш тільки ти</span>${matches.length ? `<p>Останній результат: <strong>${esc(weightLabel(matches[0].log))} × ${repsLabel(matches[0].log)}</strong> · ${esc(matches[0].date)}</p>` : '<p class="muted">Ще немає записаних результатів для цієї вправи.</p>'}${record ? `<p class="record-badge">🏆 Рекорд: ${esc(weightLabel(record))} × ${repsLabel(record)}</p>` : ''}${points.length ? progressChart(points,'кг') : ''}<p class="small muted">Графік показує найбільшу сумарну відому вагу за день, з урахуванням кількості рук / сторін. Записи з невідомою вагою залишаються в історії нижче.</p>${matches.slice(0,20).map(({date,log})=>`<p>${esc(date)} · ${esc(weightLabel(log))} × ${repsLabel(log)}</p>`).join('')}`);
 }
 
 function sessionView() {
@@ -2336,7 +2351,7 @@ function sessionView() {
   if (!s.items.length) return `<div class="session workout-studio">${workoutHeader(s)}<section class="card warmup-card">${workoutDescription(s)}${btn('✓ Завершити тренування','finish-text','','wide')}</section></div>`;
   if (s.executionMode === 'simple' || s.executionMode === 'mixed' && !s.detailedIndex?.includes(s.index)) return checklistView(s);
   const item = s.items[s.index], count = workingSetCount(s), plan = setPlan(item,Math.min(count,item.sets-1));
-  const working = s.logs.filter(log=>log.index === s.index && !log.warmup && !log.quickResult);
+  const working = s.logs.filter(log=>log.index === s.index && isWorkingSet(log));
   const last = !item.setPlans?.[count] && working.at(-1);
   const warmups = s.logs.filter(log=>log.index === s.index && log.warmup);
   return `<div class="session workout-studio">${workoutHeader(s)}${executionControls(s)}
@@ -2345,16 +2360,16 @@ function sessionView() {
       <div class="workout-exercise-heading"><div><span class="workout-section-label">Вправа ${s.index+1} / ${s.items.length} <span>${esc(item.primary || 'Тренування')}</span></span><h2 class="workout-title">${esc(item.name)}</h2><p>${item.sets} підходи <span>·</span> ${plan.seconds ? `${plan.seconds} сек` : `${esc(plan.reps)} повторень`} <span>·</span> відпочинок ${plan.rest} с</p></div><span class="workout-exercise-icon" aria-hidden="true">${String(s.index+1).padStart(2,'0')}</span></div>
       ${item.note ? `<p class="workout-note">${esc(item.note)}</p>` : ''}
       ${s.restEnd ? `<div class="workout-rest" role="status"><div><span class="workout-section-label">Відпочинок</span><strong data-end="${s.restEnd}">${clock(remaining(s.restEnd))}</strong></div><div class="actions">${btn('+30 с','rest-add','','secondary')}${btn('Пропустити','rest-skip','','ghost')}</div></div>` : ''}
-      ${exerciseNotePanel(item,s.index)}${replacementBanner(s,s.index)}<form id="set-form" class="workout-recorder"><div class="workout-record-heading"><h3>${count >= item.sets ? 'Усі підходи виконано' : `Записати підхід ${count+1}`}</h3><span>${Math.min(count,item.sets)} / ${item.sets}</span></div>
+      ${workoutLoadButton(item,s.index)}${supersetNotice(s,s.index)}${weightSuggestionPanel(item,s,s.index,true)}${exerciseNotePanel(item,s.index)}${replacementBanner(s,s.index)}<form id="set-form" class="workout-recorder"><div class="workout-record-heading"><h3>${count >= item.sets ? 'Усі підходи виконано' : `Записати підхід ${count+1}`}</h3><span>${Math.min(count,item.sets)} / ${item.sets}</span></div>
         ${previousWeight(item,s,Math.min(count,item.sets-1))}
-        <div class="workout-values">${workoutInput('weight','Вага, кг',last ? last.weightText || last.weight : plan.weight,2.5)}${workoutInput('reps','Повторення',plan.seconds ? 0 : last ? last.reps : parseInt(plan.reps) || 0,1)}</div>
-        <div class="workout-reuse">${count < item.sets && previousWorkingSet(S.sessions,item,s.id,count) ? btn('↶ Як минулого разу','use-previous-set','type="button"','ghost') : ''}<details><summary>Кг або плитки</summary><p id="set-format">Введи вагу у кг або кількість плиток: 60, 6x10 чи 6x?. Кнопки змінюють вагу на 2,5 кг, а плитки — на одну.</p></details></div>
+        ${weightDetailsFields(last || plan)}<div class="workout-values">${workoutInput('weight','Вага, кг',last ? last.weightText || last.weight : plan.weight,2.5)}${workoutInput('reps','Повторення',plan.seconds ? 0 : last ? repsLabel(last) : plan.reps || 0,1)}</div>
+        <div class="actions">${btn('Калькулятор дисків','plate-calculator','type="button"','ghost')}</div><div class="workout-reuse">${count < item.sets && previousWorkingSet(S.sessions,item,s.id,count) ? btn('↶ Як минулого разу','use-previous-set','type="button"','ghost') : ''}<details><summary>Кг або плитки</summary><p id="set-format">Введи вагу у кг або кількість плиток: 60, 6x10 чи 6x?. Повторення можна ввести приблизно: 10-12. Обсяг рахується за нижньою межею. Кнопки змінюють вагу на 2,5 кг, а плитки — на одну.</p></details></div>
         ${actualMetrics(item,s)}
         ${plan.seconds ? `<div class="workout-exercise-timer"><div class="timer" data-end="${s.timerEnd}" data-default="${plan.seconds}">${clock(s.timerEnd ? remaining(s.timerEnd) : plan.seconds)}</div>${btn(s.timerEnd ? 'Перезапустити таймер' : 'Почати таймер','timer','type="button"','secondary')}</div>` : ''}
         <button class="btn wide workout-save" type="submit" ${count >= item.sets ? 'disabled' : ''}>${count >= item.sets ? '✓ Усе записано' : '✓ Зберегти підхід'}</button>
-        <details class="workout-more workout-warmup"><summary>Розминочний підхід${warmups.length ? ` · ${warmups.length} записано` : ''}</summary><p class="small muted">Введи вагу й повторення розминки у поля вище.</p><button type="submit" class="btn secondary wide" data-warmup="1" ${warmups.length >= 20 ? 'disabled' : ''}>＋ Записати розминочний підхід</button>${warmups.map(log=>`<p class="small muted">${esc(weightLabel(log))} × ${log.reps}</p>`).join('')}</details><div class="form-error" role="alert"></div>
+        <details class="workout-more workout-warmup"><summary>Розминочний підхід${warmups.length ? ` · ${warmups.length} записано` : ''}</summary><p class="small muted">Введи вагу й повторення розминки у поля вище.</p><button type="submit" class="btn secondary wide" data-warmup="1" ${warmups.length >= 20 ? 'disabled' : ''}>＋ Записати розминочний підхід</button>${warmups.map(log=>`<p class="small muted">${esc(weightLabel(log))} × ${repsLabel(log)}</p>`).join('')}</details><div class="form-error" role="alert"></div>
       </form>
-      ${workoutSets(s,item)}
+      ${recentDropAction(s)}${workoutSets(s,item)}
       <div class="workout-next">${btn(s.index === s.items.length-1 ? 'Завершити тренування' : 'Наступна вправа','next',count < item.sets ? 'disabled' : '','wide secondary')}</div>
     </section>
     <details class="card workout-exercise-info"><summary>Техніка та попередні результати</summary><div>${item.custom ? '' : exercisePhoto(item,'large')}${item.exerciseId ? btn('Як виконувати','detail',`data-id="${esc(item.exerciseId)}" data-session="1"`,'secondary') : ''}${previousWorkout(item,s)}${workoutDescription(s)}</div></details>
@@ -2379,7 +2394,7 @@ function displayDate(value) {
   return Number.isNaN(date.getTime()) ? "Немає даних" : date.toLocaleString("uk-UA");
 }
 function homeAccessControl(id) {
-  return `<div class="admin-access-controls">${[['homeWorkouts','Домашні комплекси','toggle-home-access'],['nutrition','Харчування','toggle-nutrition-access'],['profileCustomization','Розширена кастомізація профілю','toggle-customization-access']].map(([key,title,action]) => {
+  return `<div class="admin-access-controls">${[['homeWorkouts','Домашні комплекси','toggle-home-access'],['nutrition','Харчування','toggle-nutrition-access'],['profileCustomization','Розширена кастомізація профілю','toggle-customization-access'],['extraTrainingProfiles','До 5 профілів тренувань','toggle-training-profiles-access']].map(([key,title,action]) => {
     const enabled = S.adminAccess[id]?.[key] === true;
     return `<div class="admin-access-control"><div><strong>${title}</strong><p class="small muted">${enabled ? 'Доступ надано' : 'Доступ вимкнено'}</p></div>${btn(enabled ? 'Вимкнути доступ' : 'Надати доступ', action, `data-id="${esc(id)}" aria-pressed="${enabled}"`, enabled ? 'secondary' : '')}</div>`;
   }).join('')}</div>`;
@@ -2393,7 +2408,7 @@ function adminUsersList(query = "") {
 }
 function adminItemDetails(item) {
   return `<div class="admin-plan-item"><h4>${esc(item.name)}</h4>
-    <p>${item.sets} підходів · ${esc(item.reps)} повторень · ${item.weight || 0} кг${item.seconds ? ` · ${item.seconds} сек` : ""} · відпочинок ${item.rest || 0} сек</p>
+    ${item.superset ? `<p class="small">Суперсет: ${esc(item.superset)}</p>` : ''}<p>${item.sets} підходів · ${esc(item.reps)} повторень · ${esc(weightLabel({...item,weight:item.weight || 0}))}${item.seconds ? ` · ${item.seconds} сек` : ""} · відпочинок ${item.rest || 0} сек</p>
     ${item.setPlans ? item.setPlans.map((s, k) => `<p class="small">Підхід ${k + 1}: ${esc(s.reps)} повторень · ${s.weight} кг · ${s.seconds} сек · відпочинок ${s.rest} сек</p>`).join("") : ""}
     ${item.note ? `<p class="small">${esc(item.note)}</p>` : ""}${metricSummary(item.metrics)}</div>`;
 }
@@ -2455,7 +2470,7 @@ async function adminUser(id) {
     ${sessions.length ? [...sessions].sort((a, b) => String(b.date).localeCompare(String(a.date))).map((s) => `<details class="user-program"><summary>${esc(s.date)} · ${esc(s.name)} · ${s.status === "planned" ? "Заплановано" : s.status === "completed" ? "Завершено" : "Триває"}</summary>
       <p class="small muted">${s.logs?.length || 0} підходів${s.endedAt ? ` · ${Math.max(0, Math.round((s.endedAt - s.startedAt) / 60000))} хв` : ""}</p>
       ${workoutDescription(s)}
-      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k, logs) => `<p>${setLogLabel(logs, k)}: ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}</section>`, "admin-member-title", "admin-user-dialog");
+      ${(s.items || []).map((item, index) => `${adminItemDetails(item)}<div class="admin-set-logs">${s.skipped?.includes(index) ? '<p>Вправу пропущено</p>' : ''}${(s.logs || []).filter((l) => l.index === index).map((l, k, logs) => `<p>${setLogLabel(logs, k)}: ${repsLabel(l)} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : ""}</p>${metricSummary(l.metrics)}`).join("")}</div>`).join("")}</details>`).join("") : '<p class="muted">Тренувань ще немає.</p>'}</section>`, "admin-member-title", "admin-user-dialog");
 }
 function adminCatalogControls() {
   const f = S.adminCatalog;
@@ -2644,14 +2659,14 @@ async function loadCommunity(id) {
 }
 function exerciseResultsPanel(id) {
   const exercise=S.exercises.find(e=>e.id===id);if(!exercise)return '';
-  const results=exerciseResults(S.sessions,{exerciseId:id,name:exercise.name});
-  const format=entry=>entry?`${esc(weightLabel(entry.log))} × ${entry.log.reps}`:'—';
-  return `<section class="exercise-results-panel"><div class="sectionhead"><div><span class="catalog-eyebrow">Особисті дані</span><h3>Результати тренувань</h3></div><span class="badge">Бачиш тільки ти</span></div><div class="exercise-result-metrics"><div><span>Останній підхід</span><strong>${format(results.latest)}</strong><small>${esc(results.latest?.date||'Ще немає записів')}</small></div><div><span>Найкраща вага</span><strong>${format(results.best)}</strong><small>${esc(results.best?.date||'—')}</small></div><div><span>Тренувань із вправою</span><strong>${results.workouts}</strong></div></div><p class="small muted">Дані беруться із завершених тренувань. Виправлення підходу оновлює історію, графіки та рекорди.</p>${results.entries.length?`<div class="exercise-results-table"><table><thead><tr><th>Дата</th><th>Вага</th><th>Повторення</th><th>Дії</th></tr></thead><tbody>${results.entries.slice(0,10).map(entry=>`<tr><td>${esc(entry.date)}</td><td>${esc(weightLabel(entry.log))}${entry.log.quickResult?'<small>Найкращий результат</small>':''}</td><td>${entry.log.reps}${entry.log.seconds?` · ${entry.log.seconds} с`:''}</td><td>${btn('Виправити','edit-exercise-result',`data-id="${esc(id)}" data-session="${esc(entry.sessionId)}" data-log="${entry.logIndex}"`,'ghost')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Записаних підходів для цієї вправи ще немає.</p>'}</section>`;
+  const results=exerciseResults(S.sessions,{exerciseId:id,name:exercise.name},profileContext(S.activeTrainingProfileId));
+  const format=entry=>entry?`${esc(weightLabel(entry.log))} × ${repsLabel(entry.log)}`:'—';
+  return `<section class="exercise-results-panel"><div class="sectionhead"><div><span class="catalog-eyebrow">Особисті дані</span><h3>Результати тренувань</h3><p class="small muted">Профіль: ${esc(profileLabel(profileContext(S.activeTrainingProfileId),S.trainingProfiles))}</p></div><span class="badge">Бачиш тільки ти</span></div><div class="exercise-result-metrics"><div><span>Останній підхід</span><strong>${format(results.latest)}</strong><small>${esc(results.latest?.date||'Ще немає записів')}</small></div><div><span>Найкраща вага</span><strong>${format(results.best)}</strong><small>${esc(results.best?.date||'—')}</small></div><div><span>Тренувань із вправою</span><strong>${results.workouts}</strong></div></div><p class="small muted">Дані беруться із завершених тренувань. Виправлення підходу оновлює історію, графіки та рекорди.</p>${results.entries.length?`<div class="exercise-results-table"><table><thead><tr><th>Дата</th><th>Вага</th><th>Повторення</th><th>Дії</th></tr></thead><tbody>${results.entries.slice(0,10).map(entry=>`<tr><td>${esc(entry.date)}</td><td>${esc(weightLabel(entry.log))}${entry.log.machine ? `<small>${esc(profileLabel(entry.log.machine,S.trainingProfiles))}</small>` : ''}${entry.log.dropOf !== undefined ? '<small>Дроп</small>' : entry.log.quickResult?'<small>Найкращий результат</small>':''}</td><td>${repsLabel(entry.log)}${entry.log.seconds?` · ${entry.log.seconds} с`:''}</td><td>${btn('Виправити','edit-exercise-result',`data-id="${esc(id)}" data-session="${esc(entry.sessionId)}" data-log="${entry.logIndex}"`,'ghost')}</td></tr>`).join('')}</tbody></table></div>`:'<p class="muted">Записаних підходів для цієї вправи ще немає.</p>'}</section>`;
 }
 function editExerciseResult(exerciseId,sessionId,logIndex) {
   const session=S.sessions.find(s=>s.id===sessionId&&s.status==='completed'),log=session?.logs[logIndex];
   if(!log||!S.exercises.some(e=>e.id===exerciseId)||exerciseKey(session.items[log.index])!==exerciseId)throw Error('Результат не знайдено.');
-  openModal(`<div class="sectionhead"><h2 id="edit-exercise-result-title">Виправити підхід</h2>${btn('Скасувати','detail',`data-id="${esc(exerciseId)}"`,'ghost')}</div><p class="muted">${esc(session.items[log.index].name)} · ${esc(session.date)}</p><form id="exercise-result-form" data-exercise="${esc(exerciseId)}" data-session="${esc(sessionId)}" data-log="${logIndex}"><div class="formgrid">${field('Вага: кг або плитки','weight',log.weightText||log.weight,'text','required maxlength="30"')}${field('Повторення','reps',log.reps,'number','required min="0" max="1000"')}${field('Час, сек','seconds',log.seconds||0,'number','required min="0" max="7200"')}</div><button type="submit" class="btn">Зберегти підхід</button><div class="form-error" role="alert"></div></form>`,'edit-exercise-result-title');
+  openModal(`<div class="sectionhead"><h2 id="edit-exercise-result-title">Виправити підхід</h2>${btn('Скасувати','detail',`data-id="${esc(exerciseId)}"`,'ghost')}</div><p class="muted">${esc(session.items[log.index].name)} · ${esc(session.date)}</p><form id="exercise-result-form" data-exercise="${esc(exerciseId)}" data-session="${esc(sessionId)}" data-log="${logIndex}"><div class="formgrid">${field('Вага: кг або плитки','weight',log.weightText||log.weight,'text','required maxlength="30"')}${field('Повторення','reps',repsLabel(log),'text','required maxlength="12" placeholder="10-12"')}${trainingContextField('machine',log.machine || '')}${weightDetailsFields(log)}${field('Час, сек','seconds',log.seconds||0,'number','required min="0" max="7200"')}</div><button type="submit" class="btn">Зберегти підхід</button><div class="form-error" role="alert"></div></form>`,'edit-exercise-result-title');
 }
 function detail(id,fromSession=false) {
   const catalogExercise=S.exercises.find(x=>x.id===id),sessionItem=ongoing()?.items.find(item=>item.exerciseId===id);
@@ -2740,8 +2755,8 @@ async function refresh({ isCurrent = () => true } = {}) {
   }
   S.measurementsError = '';
   S.manualSetsError = '';
-  S.trainingExtrasError='';
-  const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access, measurements, manualSets, exerciseNotes] = await Promise.all([
+  S.trainingExtrasError='';S.trainingProfilesError='';
+  const [programs, sessions, exercises, templates, settings, personalExercises, preferences, access, measurements, manualSets, exerciseNotes, profileRecords, profileSelection] = await Promise.all([
     db.list(privatePath("programs")),
     db.list(privatePath("sessions")),
     db.list("exercises"),
@@ -2756,6 +2771,8 @@ async function refresh({ isCurrent = () => true } = {}) {
     db.list(privatePath('measurements')).catch((error)=>{S.measurementsError=err(error);return []; }),
     db.list(privatePath('manualSets')).catch((error)=>{S.manualSetsError=err(error);return []; }),
     db.list(privatePath('exerciseNotes')).catch(()=>[]),
+    db.list(privatePath('trainingProfiles')).catch(error=>{S.trainingProfilesError=err(error);return null;}),
+    db.get(privatePath('trainingProfileSettings/selection')).catch(()=>null),
   ]);
   if (!isCurrent()) return;
   if (owner() && S.route === "admin") {
@@ -2767,6 +2784,9 @@ async function refresh({ isCurrent = () => true } = {}) {
   }
   if (!isCurrent()) return;
   Object.assign(S, {
+    trainingProfiles:profileRecords === null ? S.trainingProfiles : trainingProfiles(profileRecords),
+    trainingProfilesStoredIds:profileRecords?.map(profile=>profile.id) || [],
+    trainingProfileLimit:trainingProfileLimit(access),
     homeAccess: access?.homeWorkouts === true,
     customizationAccess:access?.profileCustomization===true,
     nutritionAccess: access?.nutrition === true,
@@ -2781,6 +2801,8 @@ async function refresh({ isCurrent = () => true } = {}) {
     settings: settings || S.settings,
     loaded: true,
   });
+  S.activeTrainingProfileId=availableProfiles(S.trainingProfiles,S.trainingProfileLimit).some(profile=>profile.id === profileSelection?.activeId) ? profileSelection.activeId : defaultProfileId;
+  Object.assign(S,normalizeProfileContexts(S.sessions,S.manualSets,S.trainingProfiles));
   if(['home','profile','session'].includes(S.route)) {
     try {
       const [goals,reflections,challenges,polls]=await Promise.all([db.weeklyGoals(),db.list(privatePath('workoutReflections')),db.syncChallenges(sessions),['home','profile'].includes(S.route)?db.meetingPolls():Promise.resolve([])]);
@@ -2788,15 +2810,21 @@ async function refresh({ isCurrent = () => true } = {}) {
     } catch(error) {if(isCurrent())S.trainingExtrasError='Не вдалося завантажити цілі, самопочуття, виклики або опитування. Спробуй оновити сторінку.';}
   }
   if (S.route === 'nutrition' || (owner() && S.route === 'admin')) await loadNutrition();
-  if (navigator.onLine && S.publicProfileReady) db.publishProfileStats(sessions,manualSets).catch((error) => console.warn('Статистика профілю:', error.code));
+  if (navigator.onLine && S.publicProfileReady) db.publishProfileStats(sessions,manualSets,programs).catch((error) => console.warn('Статистика профілю:', error.code));
 }
 async function saveSession(s) {
   const wasActive = S.sessions.some((session)=>session.id === s.id && session.status === 'active');
-  if (s.status === 'active' && !wasActive) {
+  if (s.status === 'active' && !wasActive && !s.logs.length) {
+    s=applyTrainingProfile(s,assertProfileAvailable(S.trainingProfiles,S.activeTrainingProfileId,S.trainingProfileLimit));
     s.executionMode = preferredExecutionMode(localStorage, S.user.uid, S.sessions) || s.executionMode;
   }
   s.updatedAt = Date.now();
-  await db.save(privatePath(`sessions/${s.id}`), stripId(s));
+  const completedLoads=wasActive && s.status === 'completed'?completedProfileLoads(s,S.trainingProfiles,S.trainingProfileLimit):[];
+  if (completedLoads.length) {
+    await db.saveMany([[privatePath(`sessions/${s.id}`),stripId(s)],...completedLoads.map(profile=>[privatePath(`trainingProfiles/${profile.id}`),stripId(profile)])]);
+    S.trainingProfiles=S.trainingProfiles.map(profile=>completedLoads.find(updated=>updated.id === profile.id)||profile);
+    S.trainingProfilesStoredIds=[...new Set([...S.trainingProfilesStoredIds,...completedLoads.map(profile=>profile.id)])];
+  } else await db.save(privatePath(`sessions/${s.id}`), stripId(s));
   const i = S.sessions.findIndex((x) => x.id === s.id);
   if (i < 0) S.sessions.push(s);
   else S.sessions[i] = s;
@@ -2805,7 +2833,7 @@ async function saveSession(s) {
     if (currentPage === 'session') window.history.replaceState(null,'',new URL(`workout.html?summary=${encodeURIComponent(s.id)}`,appBase));
   }
   if (s.status === 'completed') try { clearSetDraft(localStorage,S.user.uid,s.id); } catch {}
-  if (navigator.onLine && s.status === 'completed') db.publishProfileStats(S.sessions,S.manualSets).catch((error) => console.warn('Не вдалося оновити статистику профілю:', error.code));
+  if (navigator.onLine && s.status === 'completed') db.publishProfileStats(S.sessions,S.manualSets,S.programs).catch((error) => console.warn('Не вдалося оновити статистику профілю:', error.code));
   if (s.status === "completed" && s.programId === active()?.id && active()?.scheduleMode === "sequence") chosenDay = null;
   render();
 }
@@ -2841,7 +2869,7 @@ async function action(a, b) {
     j = +b.dataset.j;
   switch (a) {
     case 'toggle-auth-password': {
-      const input=b.closest('label').querySelector('input'),visible=input.type==='password';input.type=visible?'text':'password';b.textContent=visible?'Сховати пароль':'Показати пароль';b.setAttribute('aria-pressed',String(visible));break;
+      const input=b.closest('label').querySelector('input'),visible=input.type==='password';input.type=visible?'text':'password';b.setAttribute('aria-label',authText(visible?'hide':'show'));b.setAttribute('aria-pressed',String(visible));break;
     }
     case 'exercise-note':captureSetInputs();await editExerciseNote(b);break;
     case 'result-card':await openResultCard(id);break;
@@ -2958,10 +2986,38 @@ async function action(a, b) {
 
     case 'catalog-add': addExercisePicker(id); break;
     case 'exercise-progress': exerciseProgress(id); break;
+    case 'plate-calculator': openPlateCalculator();break;
+    case 'add-plate-row': {
+      const rows=modal.querySelector('#plate-inventory-rows');if(!rows || rows.children.length>=12)throw Error('До 12 розмірів дисків.');
+      const next=Math.max(-1,...[...rows.children].map(row=>Number(row.dataset.plateRow)))+1;
+      rows.insertAdjacentHTML('beforeend',plateInventoryRow({weight:1,pairs:1},next));clearPlateCalculation();break;
+    }
+    case 'remove-plate-row': b.closest('[data-plate-row]')?.remove();clearPlateCalculation();break;
+    case 'apply-plate-result': {
+      const session=ongoing(),form=document.querySelector('#set-form'),target=plateCalculationTarget;
+      if(!plateCalculation || !target || !form || !session || session.id !== target.sessionId || session.index !== target.index || session.logs.length !== target.logs || !sameWeightDetails(readWeightDetails(new FormData(form)),target.details))throw Error('Підхід змінився. Відкрий калькулятор знову.');
+      form.elements.weight.value=target.details.weightBasis === 'perSide'?plateCalculation.perSideWeight:plateCalculation.total;
+      captureSetInputs();modal.close();toast('Вагу підставлено. Збережи підхід після виконання.');break;
+    }
+    case 'training-profiles': trainingProfilesDialog();break;
+    case 'new-training-profile': trainingProfileForm();break;
+    case 'rename-training-profile': trainingProfileForm(id);break;
+    case 'select-training-profile': await selectTrainingProfile(id);modal.close();break;
+    case 'edit-manual-set': editManualSet(id); break;
+    case 'add-drop-set': openDropSet(Number(b.dataset.log)); break;
+    case 'apply-weight-suggestion': {
+      const session=ongoing(), item=session?.items[session.index], form=document.querySelector('#set-form');
+      if (!item || !form || workingSetCount(session) >= item.sets) throw Error('Обери незавершений підхід.');
+      const suggestion=nextWeightSuggestion(S.sessions,{...item,...readWeightDetails(new FormData(form))},{currentId:session.id,beforeDate:session.date});
+      const weight=suggestion.weights[workingSetCount(session)];
+      if (weight === undefined) throw Error(suggestion.reason);
+      form.elements.weight.value=weight;captureSetInputs();toast('Вагу підставлено. Збережи підхід після виконання.');break;
+    }
+    case 'workout-load': captureSetInputs(); workoutLoadEditor(Number(b.dataset.index)); break;
     case 'quick-result': {
       const session = ongoing(), index = +b.dataset.index;
       const log = session?.logs.find(l => l.index === index && l.quickResult);
-      openModal(`<h2>Найкращий результат · ${esc(session.items[index].name)}</h2><p class="muted">Один необов’язковий запис за вправу. Повторне збереження оновить його.</p><form id="quick-result-form" data-index="${index}"><div class="formgrid">${field('Вага: кг або плитки','weight',log?.weightText || log?.weight || '', 'text','required maxlength="30" placeholder="60, 6x10 або 6x?"')}${field('Повторення','reps',log?.reps || '', 'number','required min="1" max="1000"')}</div><p class="small muted">6x10 = 6 плиток по 10 кг. 6x? = 6 плиток невідомої ваги; збережеться без перерахунку в кг.</p><button class="btn" type="submit">Зберегти результат</button><div class="form-error" role="alert"></div></form>`);
+      openModal(`<h2>Найкращий результат · ${esc(session.items[index].name)}</h2><p class="muted">Один необов’язковий запис за вправу. Повторне збереження оновить його.</p><form id="quick-result-form" data-index="${index}"><div class="formgrid">${field('Вага: кг або плитки','weight',log?.weightText || log?.weight || '', 'text','required maxlength="30" placeholder="60, 6x10 або 6x?"')}${field('Повторення','reps',log ? repsLabel(log) : '', 'text','required maxlength="12" placeholder="10-12"')}</div>${weightDetailsFields(log || session.items[index])}<p class="small muted">6x10 = 6 плиток по 10 кг. 6x? = 6 плиток невідомої ваги; збережеться без перерахунку в кг.</p><button class="btn" type="submit">Зберегти результат</button><div class="form-error" role="alert"></div></form>`);
       break;
     }
     case 'simple-done': await saveSession(simpleDone(ongoing(), +b.dataset.index)); break;
@@ -3003,7 +3059,7 @@ async function action(a, b) {
       if(confirm(`Видалити підхід «${b.dataset.name || 'Вправа'}»?`)) {
         await db.remove(privatePath(`manualSets/${id}`));
         S.manualSets=S.manualSets.filter(entry=>entry.id!==id);
-        if(navigator.onLine)await db.publishProfileStats(S.sessions,S.manualSets);
+        if(navigator.onLine)await db.publishProfileStats(S.sessions,S.manualSets,S.programs);
         render();toast('Підхід видалено');
       }
       break;
@@ -3160,6 +3216,10 @@ async function action(a, b) {
       if (name === 'weight' && tiles) {
         const value = `${Math.max(1,Math.min(1000,Number(tiles[1])+Math.sign(delta)))}x${tiles[2]}`;
         parseWeight(value); input.value = value;
+      } else if (name === 'reps') {
+        const parsed = parseReps(text);
+        const shift = Math.max(-parsed.reps, Math.min(delta, 1000 - parsed.repsMax));
+        input.value = repsLabel({ reps: parsed.reps + shift, repsMax: parsed.repsMax + shift });
       } else {
         const value = Number(text);
         if (!Number.isFinite(value)) { input.focus(); return; }
@@ -3170,10 +3230,11 @@ async function action(a, b) {
     }
     case 'use-previous-set': {
       const session = ongoing(), item = session?.items[session.index];
-      const previous = item && previousWorkingSet(S.sessions, item, session.id, workingSetCount(session));
+      const inputForm=document.querySelector('#set-form');
+      const previous = item && previousWorkingSet(S.sessions, {...item,...readWeightDetails(new FormData(inputForm))}, session.id, workingSetCount(session));
       if (!previous) throw Error('Попереднього робочого підходу немає.');
       const form = document.querySelector('#set-form');
-      form.elements.reps.value = previous.reps;
+      form.elements.reps.value = repsLabel(previous);
       form.elements.weight.value = previous.weightText || previous.weight;
       (item.metrics || []).forEach((metric, index) => {
         const value = previous.metrics?.find((m) => m.name === metric.name && m.unit === metric.unit);
@@ -3186,7 +3247,7 @@ async function action(a, b) {
       const session = ongoing();
       if (!session) throw Error('Немає активного тренування.');
       captureSetInputs();
-      openModal(`<div class="sectionhead"><h2 id="finish-workout-title">Завершити тренування?</h2>${btn('Продовжити','close','','ghost')}</div><p class="muted">${esc(session.name)} · ${session.logs.filter(log=>!log.warmup && !log.quickResult).length} записаних підходів</p><div class="workout-finish-options"><section><h3>Зберегти виконане</h3><p>Завершити достроково та додати результат до історії й статистики профілю. Після цього дані можна виправити.</p>${btn('Завершити й зберегти','finish-early-save',`data-id="${esc(session.id)}"`,'wide')}</section><section><h3>Без запису в профіль</h3><p>Прибрати це тренування разом із його підходами. Воно не потрапить в історію, рекорди чи статистику. Відновити його буде неможливо.</p>${btn('Завершити без збереження','discard-workout',`data-id="${esc(session.id)}"`,'danger wide')}</section></div>`,'finish-workout-title','workout-finish-dialog');
+      openModal(`<div class="sectionhead"><h2 id="finish-workout-title">Завершити тренування?</h2>${btn('Продовжити','close','','ghost')}</div><p class="muted">${esc(session.name)} · ${session.logs.filter(log=>isWorkingSet(log)).length} записаних підходів</p><div class="workout-finish-options"><section><h3>Зберегти виконане</h3><p>Завершити достроково та додати результат до історії й статистики профілю. Після цього дані можна виправити.</p>${btn('Завершити й зберегти','finish-early-save',`data-id="${esc(session.id)}"`,'wide')}</section><section><h3>Без запису в профіль</h3><p>Прибрати це тренування разом із його підходами. Воно не потрапить в історію, рекорди чи статистику. Відновити його буде неможливо.</p>${btn('Завершити без збереження','discard-workout',`data-id="${esc(session.id)}"`,'danger wide')}</section></div>`,'finish-workout-title','workout-finish-dialog');
       break;
     }
     case 'finish-early-save': {
@@ -3333,14 +3394,15 @@ async function action(a, b) {
       S.adminUsers=users;S.adminAccess=Object.fromEntries(access.map(({id,...data})=>[id,data]));S.adminStatsAt=Date.now();
       updateAdminStatistics();document.querySelector('#admin-users-list').innerHTML=adminUsersList(document.querySelector('#admin-user-search').value);toast('Статистику оновлено');break;
     }
+    case 'toggle-training-profiles-access':
     case 'toggle-customization-access':
     case 'toggle-nutrition-access':
     case 'toggle-home-access': {
       if (!owner() || !S.adminUsers.some(u => u.id === id)) throw Error('Немає доступу');
-      const key = a === 'toggle-home-access' ? 'homeWorkouts' : a==='toggle-customization-access'?'profileCustomization':'nutrition';
+      const key = a === 'toggle-training-profiles-access' ? 'extraTrainingProfiles' : a === 'toggle-home-access' ? 'homeWorkouts' : a==='toggle-customization-access'?'profileCustomization':'nutrition';
       const data = await db.toggleAccess(id,key);
       S.adminAccess[id] = data;
-      if (id === S.user.uid) { S.homeAccess = data.homeWorkouts; S.nutritionAccess = data.nutrition;S.customizationAccess=data.profileCustomization; }
+      if (id === S.user.uid) { S.homeAccess = data.homeWorkouts; S.nutritionAccess = data.nutrition;S.customizationAccess=data.profileCustomization;S.trainingProfileLimit=trainingProfileLimit(data); }
       document.querySelector('#admin-users-list').innerHTML = adminUsersList(document.querySelector('#admin-user-search').value);
       const control = modal.querySelector('.admin-access-controls');
       if (control) control.outerHTML = homeAccessControl(id);
@@ -3372,8 +3434,8 @@ async function action(a, b) {
       if (!["login", "register"].includes(id) || authMode === id) break;
       authMode = id;
       authNotice = "";
-      login();
-      document.querySelector(".auth-panel h1")?.focus();
+      login({animate:true});
+      document.querySelector(".auth-panel h1")?.focus({preventScroll:true});
       break;
     case "reset-password": {
       const form = document.querySelector("#auth-form");
@@ -3383,26 +3445,26 @@ async function action(a, b) {
         email.focus();
         return;
       }
-      if (!db) throw Error("Зачекай на підключення Firebase.");
+      if (!db) throw authFailure('connecting');
       const address = email.value;
       form.querySelector(".form-error").textContent = "";
       await db.resetPassword(address);
       openModal(`
-        <h2 id="reset-email-title">Перевір пошту</h2>
-        <p>Якщо для <b>${esc(address)}</b> є обліковий запис, інструкцію для відновлення пароля надіслано на цю адресу.</p>
-        <p class="muted small">Лист може надійти за кілька хвилин. Перевір також папку «Спам».</p>
-        ${btn("Зрозуміло", "close", 'type="button" autofocus')}
+        <h2 id="reset-email-title">${authText("resetTitle")}</h2>
+        <p>${authText("resetBefore")} <b>${esc(address)}</b> ${authText("resetAfter")}</p>
+        <p class="muted small">${authText("resetHint")}</p>
+        ${btn(authText("gotIt"), "close", 'type="button" autofocus')}
       `, "reset-email-title");
       break;
     }
     case "resend-email":
       await db.sendVerification();
-      authNotice = "Лист надіслано. Перевір пошту та папку «Спам».";
+      authNotice = "sent";
       login();
       break;
     case "check-email": {
       const user = await db.checkVerification();
-      if (!user?.emailVerified) throw Error("Пошта ще не підтверджена. Відкрий посилання з листа.");
+      if (!user?.emailVerified) throw authFailure('notVerified');
       await handleUser(user);
       break;
     }
@@ -3545,7 +3607,7 @@ async function action(a, b) {
                 .map(
                   (l, n, logs) => `
                     <p class="small">
-                      ${setLogLabel(logs, n)} · ${l.reps} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : i.seconds ? ` · план ${i.seconds} сек` : ""}
+                      ${setLogLabel(logs, n)} · ${repsLabel(l)} повторень · ${esc(weightLabel(l))}${l.seconds ? ` · ${l.seconds} сек` : i.seconds ? ` · план ${i.seconds} сек` : ""}
                     </p>
                     ${metricSummary(l.metrics)}
                   `,
@@ -3700,6 +3762,10 @@ async function action(a, b) {
       if (!builderFeatures.some(([value]) => value === key)) break;
       const selected = itemFeatures(item);
       item.builderFeatures = selected.includes(key) ? selected.filter((value) => value !== key) : [...selected, key];
+      if (key === "plans" && !selected.includes(key)) {
+        item.setPlans = Array.from({length:item.sets},(_,k)=>({...setPlan(item,k)}));
+        item.builderFeatures = [...new Set([...item.builderFeatures,"sets"])];
+      }
       if (selected.includes(key)) {
         if (key === "plans") delete item.setPlans;
         else if (key === "metrics") item.metrics = [];
@@ -3819,7 +3885,11 @@ async function action(a, b) {
       break;
     case "remove-item":
       collectEditor();
-      editor.days[n].items.splice(j, 1);
+      {
+        const items=editor.days[n].items, group=items[j].superset;
+        items.splice(j,1);
+        if (group) for (const item of items) if (item.superset === group) delete item.superset;
+      }
       render();
       break;
     case "move": {
@@ -4054,6 +4124,7 @@ document.addEventListener("keydown", (event) => {
 });
 document.addEventListener('input', (event) => {
   if(event.target.closest('#set-form'))captureSetInputs();
+  if(event.target.closest('#plate-calculator-form'))clearPlateCalculation();
   if(event.target.dataset.crop && imageEdit) { imageEdit.crop[event.target.dataset.crop]=Number(event.target.value); updateImageCrop(); }
   const form = event.target.closest('.admin-tag-form');
   if (!form) return;
@@ -4106,13 +4177,101 @@ document.addEventListener("submit", async (event) => {
       const layout=await db.saveProfileLayout(value);if(S.people)S.people.layout=layout;modal.close();render();toast('Блоки профілю збережено');
     }
 
+    if (f.id === 'plate-calculator-form') {
+      clearPlateCalculation();
+      const plates=[...f.querySelectorAll('[data-plate-row]')].map(row=>({weight:v.get(`plate-weight-${row.dataset.plateRow}`),pairs:v.get(`plate-pairs-${row.dataset.plateRow}`)}));
+      const config={target:v.get('target'),mode:String(v.get('mode')),barWeight:v.get('barWeight'),plates};
+      const result=calculatePlates(config);
+      plateCalculation=result;
+      try{localStorage.setItem(plateCalculatorKey(),JSON.stringify({mode:String(v.get('mode')),barWeight:Number(v.get('barWeight')),plates:plateInventory(plates)}));}catch{}
+      modal.querySelector('#plate-calculator-result').innerHTML=plateCalculatorResult(result);
+    }
+    if (f.id === 'training-profile-form') {
+      if (S.trainingProfilesError) throw Error('Спочатку завантаж профілі тренувань.');
+      const name=profileName(String(v.get('name') || '')),id=f.dataset.id;
+      if (S.trainingProfiles.some(profile=>profile.id !== id && profile.name.toLocaleLowerCase('uk') === name.toLocaleLowerCase('uk'))) throw Error('Профіль із такою назвою вже є.');
+      if (id) {
+        const previous=assertProfileAvailable(S.trainingProfiles,id,S.trainingProfileLimit),record={...previous,name,updatedAt:Math.max(Date.now(),previous.createdAt)};
+        await db.save(privatePath(`trainingProfiles/${id}`),stripId(record));
+        S.trainingProfiles=S.trainingProfiles.map(profile=>profile.id === id?record:profile);
+        if (!S.trainingProfilesStoredIds.includes(id)) S.trainingProfilesStoredIds.push(id);
+      } else {
+        if (availableProfiles(S.trainingProfiles,S.trainingProfileLimit).length >= S.trainingProfileLimit) throw Error('Досягнуто ліміту профілів тренувань.');
+        const created=await db.createTrainingProfile(name,String(v.get('legacyMachine') || ''));
+        S.trainingProfiles=trainingProfiles([...S.trainingProfiles,created]);
+        S.trainingProfilesStoredIds=[...new Set([...S.trainingProfilesStoredIds,defaultProfileId,created.id])];
+        Object.assign(S,normalizeProfileContexts(S.sessions,S.manualSets,S.trainingProfiles));
+      }
+      render();trainingProfilesDialog();toast(id?'Назву профілю оновлено':'Профіль створено. Обери його для тренування.');
+    }
+    if (f.id === 'drop-set-form') {
+      const session=ongoing();
+      if (!session || session.id !== f.dataset.session || session.logs.length !== Number(f.dataset.logs)) throw Error('Підходи змінилися. Відкрий запис дропу знову.');
+      await saveSession(appendDropSet(session,Number(f.dataset.parent),v.get('reps'),parseWeight(v.get('weight'))));
+      modal.close();toast('Дроп збережено окремо від основних підходів');
+    }
+    if (f.id === 'workout-load-form') {
+      const session = copy(ongoing()), index = Number(f.dataset.index), item = session?.items[index];
+      if (!item || session.id !== f.dataset.session) throw Error('Тренування змінилося. Відкрий налаштування знову.');
+      const machine = machineName(String(v.get('machine') || ''));
+      const plans = Array.from({length:item.sets},(_,k)=>({ ...setPlan(item,k), ...readWeightDetails(v), weight:Number(v.get(`weight-${k}`)), reps:repsLabel(parseReps(v.get(`reps-${k}`))) }));
+      Object.assign(item,{ ...readWeightDetails(v), machine, weightStep:Number(v.get('weightStep')), weight:plans[0].weight, reps:plans[0].reps, setPlans:plans });
+      Object.assign(session,configureSuperset(session,index,Number(v.get('supersetPartner'))));
+      if (!validProgram({ name:session.name, type:'Власна програма', days:[{weekday:0,name:session.name,groups:'',items:session.items}] })) throw Error('Перевір вагу й повторення.');
+      const writes=[],now=Date.now();let updatedProgram=null,updatedProfile=null;
+      if (v.has('rememberProfile')) {
+        const profile=profileForContext(machine,S.trainingProfiles);
+        if (!profile) throw Error('Спочатку прив’яжи архівні записи до профілю тренувань.');
+        assertProfileAvailable(S.trainingProfiles,profile.id,S.trainingProfileLimit);
+        updatedProfile=withProfileLoad(profile,item,now);
+        writes.push([privatePath(`trainingProfiles/${profile.id}`),stripId(updatedProfile)]);
+      }
+      if (v.has('remember')) {
+        const program = copy(S.programs.find(p=>p.id === session.programId));
+        const matches = program?.days.find(day=>day.weekday === session.dayId)?.items.filter(entry=>exerciseKey(entry) === exerciseKey(item)) || [];
+        if (matches.length !== 1) throw Error('Вправу в програмі змінено. Відкрий налаштування знову.');
+        // Match set counts independently: today's exercise may have been changed.
+        const target = matches[0];
+        Object.assign(target,{...weightDetails(item),machine,weightStep:item.weightStep,weight:item.weight,reps:item.reps,setPlans:Array.from({length:target.sets},(_,k)=>({...setPlan(target,k),...plans[Math.min(k,plans.length-1)]}))});
+        if (program.builderMode === 'cross') target.builderFeatures = [...new Set([...itemFeatures(target),'sets','reps','weight','plans'])];
+        const day=program.days.find(day=>day.weekday === session.dayId), targetIndex=day.items.indexOf(target);
+        const partner=supersetPartner(session.items,index);
+        let targetPartner=-1;
+        if (partner >= 0) {
+          const candidates=day.items.flatMap((entry,k)=>exerciseKey(entry) === exerciseKey(session.items[partner]) ? [k] : []);
+          if (candidates.length !== 1) throw Error('Не вдалося визначити парну вправу в програмі. Збережи налаштування лише для цього тренування.');
+          targetPartner=candidates[0];
+        }
+        day.items=configureSuperset({status:'active',items:day.items,logs:[]},targetIndex,targetPartner).items;
+        if (!validProgram(program)) throw Error('Перевір параметри програми.');
+        updatedProgram=program;
+        writes.push([privatePath(`programs/${program.id}`),{...stripId(program),updatedAt:now}]);
+      }
+      writes.push([privatePath(`sessions/${session.id}`),{...stripId(session),updatedAt:now}]);
+      await db.saveMany(writes);
+      if (updatedProgram) S.programs=S.programs.map(profile=>profile.id === updatedProgram.id?updatedProgram:profile);
+      if (updatedProfile) {S.trainingProfiles=S.trainingProfiles.map(profile=>profile.id === updatedProfile.id?updatedProfile:profile);if(!S.trainingProfilesStoredIds.includes(updatedProfile.id))S.trainingProfilesStoredIds.push(updatedProfile.id);}
+      S.sessions=S.sessions.map(value=>value.id === session.id?session:value);
+      try { clearSetDraft(localStorage,S.user.uid,session.id); } catch {}
+      modal.close();render();toast('Навантаження профілю оновлено');
+    }
+    if (f.id === 'edit-manual-set-form') {
+      const entry = S.manualSets.find(record=>record.id === f.dataset.id);
+      if (!entry) throw Error('Підхід не знайдено.');
+      const data = manualSetData({...entry,...Object.fromEntries(v),...readWeightDetails(v),...parseReps(v.get('reps'),{min:1})});
+      const record = {...data,createdAt:entry.createdAt,updatedAt:Math.max(Date.now(),entry.createdAt)};
+      await db.save(privatePath(`manualSets/${entry.id}`),record);
+      S.manualSets=S.manualSets.map(item=>item.id===entry.id?{...record,id:entry.id}:item);
+      if(navigator.onLine)await db.publishProfileStats(S.sessions,S.manualSets,S.programs);
+      modal.close();render();toast('Підхід оновлено');
+    }
     if(f.id==='manual-set-form') {
       const name=String(v.get('exercise')||'');
-      const data=manualSetData({exercise:name,exerciseKey:manualExerciseKey(name),weight:v.get('weight'),reps:Number(v.get('reps')),date:v.get('date')});
+      const data=manualSetData({exercise:name,exerciseKey:manualExerciseKey(name),weight:v.get('weight'),...readWeightDetails(v),...parseReps(v.get('reps'), { min: 1 }),machine:String(v.get('machine') || ''),date:v.get('date')});
       const id=crypto.randomUUID(),now=Date.now(),record={...data,createdAt:now,updatedAt:now};
       await db.save(privatePath(`manualSets/${id}`),record);
       S.manualSets.push({...record,id});
-      if(navigator.onLine)await db.publishProfileStats(S.sessions,S.manualSets);
+      if(navigator.onLine)await db.publishProfileStats(S.sessions,S.manualSets,S.programs);
       render();toast('Підхід збережено');
     }
     if(f.id==='measurement-form') {
@@ -4194,9 +4353,10 @@ document.addEventListener("submit", async (event) => {
     }
     if (f.id === 'visibility-form') {
       const visibility = Object.fromEntries(Object.keys(profileVisibility({})).map((key)=>[key, v.has(key)]));
-      await db.publishProfileStats(S.sessions,S.manualSets);
-      await db.patch(`publicProfiles/${S.user.uid}`, { visibility });
+      visibility.calendarScope=String(v.get('calendarScope') || 'all');
+      const calendar=await db.setProfileVisibility(visibility,S.sessions,S.programs,S.manualSets);
       S.selfPublic.visibility = visibility; S.people.person.visibility = visibility;
+      if(S.people.stats)S.people.stats.calendar=calendar;
       render(); toast('Видимість профілю збережено');
     }
     if (f.id === 'contacts-form') {
@@ -4224,13 +4384,13 @@ document.addEventListener("submit", async (event) => {
       const exerciseId=f.dataset.exercise,session=S.sessions.find(s=>s.id===f.dataset.session&&s.status==='completed'),index=Number(f.dataset.log);
       const log=session?.logs[index];
       if(!log||exerciseKey(session.items[log.index])!==exerciseId)throw Error('Результат змінився або недоступний. Відкрий його знову.');
-      const logs=session.logs.map((entry,k)=>k===index?{...entry,...parseWeight(v.get('weight')),reps:Number(v.get('reps')),seconds:Number(v.get('seconds'))}:entry);
+      const logs=session.logs.map((entry,k)=>k===index?{...entry,...parseWeight(v.get('weight')),...readWeightDetails(v),...parseReps(v.get('reps')),machine:machineName(String(v.get('machine') || '')),seconds:Number(v.get('seconds'))}:entry);
       const updated=editCompletedSession(session,{name:session.name,date:session.date,description:session.description||'',minutes:(session.endedAt-session.startedAt)/60000,logs});
       await saveSession(updated);detail(exerciseId);toast('Результат тренування оновлено');
     }
     if (f.id === "history-edit-form") {
       const session = S.sessions.find((s) => s.id === f.dataset.id);
-      const logs = session.logs.map((l, k) => ({ ...l, reps: +v.get(`log-reps-${k}`), ...parseWeight(v.get(`log-weight-${k}`)), seconds: +v.get(`log-seconds-${k}`),
+      const logs = session.logs.map((l, k) => ({ ...l, ...parseReps(v.get(`log-reps-${k}`)), ...readWeightDetails(v,`log-${k}-`), machine: machineName(String(v.get(`log-machine-${k}`) || "")), ...parseWeight(v.get(`log-weight-${k}`)), seconds: +v.get(`log-seconds-${k}`),
         metrics: (l.metrics || []).map((m, j) => ({ ...m, value: String(v.get(`log-metric-${k}-${j}`) || "").trim() })) }));
       await saveSession(editCompletedSession(session, { name: String(v.get("name")), date: v.get("date"), description: String(v.get("description") || ""), minutes: +v.get("minutes"), logs }));
       modal.close(); toast("Результати виправлено");
@@ -4241,15 +4401,15 @@ document.addEventListener("submit", async (event) => {
       restoreDraft = parseBackup(await file.text()); restorePreview();
     }
     if (f.id === "auth-form") {
-      if (!db) throw Error("Зачекай на підключення Firebase.");
+      if (!db) throw authFailure('connecting');
       const email = String(v.get("email") || "").trim(),
         password = String(v.get("password") || "");
       if (authMode === "register") {
         const name = String(v.get("name") || "").trim();
-        if (!name) throw Error("Вкажи своє ім’я.");
-        if (password !== v.get("confirm")) throw Error("Паролі не збігаються.");
+        if (!name) throw authFailure('enterName');
+        if (password !== v.get("confirm")) throw authFailure('passwordMismatch');
         await db.register(name, email, password);
-        authNotice = "Акаунт створено. Лист підтвердження надіслано.";
+        authNotice = "created";
         render();
       } else {
         authNotice = "";
@@ -4306,7 +4466,7 @@ document.addEventListener("submit", async (event) => {
       toast("Дату тренування змінено");
     }
     if (f.id === 'quick-result-form') {
-      await saveSession(saveQuickResult(ongoing(), +f.dataset.index, +v.get('reps'), v.get('weight')));
+      await saveSession(saveQuickResult(ongoing(), +f.dataset.index, v.get('reps'), v.get('weight'),readWeightDetails(v)));
       modal.close(); toast('Результат вправи збережено');
     }
     if (f.id === 'catalog-add-form') {
@@ -4338,10 +4498,11 @@ document.addEventListener("submit", async (event) => {
         }));
       if (!validMetrics(metrics)) throw Error("Перевір власні параметри вправи.");
       const warmup = event.submitter?.dataset.warmup === "1";
-      const record = personalRecords(S.sessions.map((s) => s.id === current.id ? { ...s, status: 'completed' } : s)).find((r) => r.key === exerciseKey(item));
+      const record = personalRecords(S.sessions.map((s) => s.id === current.id ? { ...s, status: 'completed' } : s),item.machine || '').find((r) => r.key === exerciseKey(item));
       const parsedWeight = parseWeight(v.get('weight'));
-      const newRecord = !warmup && !parsedWeight.weightUnknown && +v.get('reps') > 0 && (!record || parsedWeight.weight > record.weight || parsedWeight.weight === record.weight && +v.get('reps') > record.reps);
-      const s = completeSet(current, +v.get("reps"), parsedWeight.weight, metrics, warmup);
+      const actualReps = parseReps(v.get('reps')).reps;
+      const newRecord = !warmup && !parsedWeight.weightUnknown && actualReps > 0 && (!record || totalWeight({...parsedWeight,...readWeightDetails(v)}) > totalWeight(record) || totalWeight({...parsedWeight,...readWeightDetails(v)}) === totalWeight(record) && actualReps > record.reps);
+      const s = completeSet(current, v.get("reps"), parsedWeight.weight, metrics, warmup,readWeightDetails(v));
       Object.assign(s.logs.at(-1), parsedWeight);
       await saveSession(s);
       toast(warmup ? "Розминочний підхід збережено" : newRecord ? '🏆 Новий найкращий результат! Заверши тренування, щоб зберегти рекорд.' : "Підхід збережено");
@@ -4445,6 +4606,21 @@ document.addEventListener("change", async (event) => {
     finally { if(submit.isConnected)submit.disabled=false; }
     return;
   }
+  if (target.matches('[data-weight-basis]')) {
+    updateWeightDetailsFields(target.closest('form'));
+    if (target.closest('#set-form')) {
+      captureSetInputs();
+      const form=target.closest('form'),session=ongoing(),panel=document.querySelector('.weight-suggestion');
+      if(session && panel)panel.outerHTML=weightSuggestionPanel({...session.items[session.index],...readWeightDetails(new FormData(form))},session,session.index,true);
+    }
+    return;
+  }
+  if (target.matches('[data-training-profile-select]')) {
+    if (busy) {target.value=S.activeTrainingProfileId;return;}
+    busy=true;
+    try {captureSetInputs();await selectTrainingProfile(target.value);}catch(error){target.value=S.activeTrainingProfileId;toast(err(error));}finally{busy=false;}
+    return;
+  }
   if (target.matches('[data-alternative-equipment]')) {
     target.closest('.exercise-alternatives').querySelectorAll('.alternative-row').forEach(row=>{row.hidden=!!target.value && row.dataset.equipment!==target.value;}); return;
   }
@@ -4497,10 +4673,11 @@ document.addEventListener("change", async (event) => {
     return;
   }
   if (target.closest("#program-form")) persistEditorDraft(true);
-  if (["progress-metric", "progress-period", "progress-exercise", "progress-source"].includes(target.id)) {
+  if (["progress-metric", "progress-period", "progress-exercise", "progress-source", "progress-machine"].includes(target.id)) {
     if (target.id === "progress-metric") S.progressMetric = target.value;
     else if (target.id === "progress-period") S.progressPeriod = target.value;
     else if (target.id === "progress-source") S.progressSource = target.value;
+    else if (target.id === "progress-machine") S.progressMachine = target.value;
     else S.progressExercise = target.value;
     document.querySelector("#progress-view").innerHTML = progressView();
     return;
@@ -4541,7 +4718,7 @@ window.addEventListener("online", async () => {
   if (!S.user?.emailVerified || !db?.sync) return;
   try {
     await db.sync(); S.syncError = ""; await refresh();
-    if (!['nutrition','achievements'].includes(S.route)) await db.publishProfileStats(S.sessions,S.manualSets).catch(()=>{});
+    if (!['nutrition','achievements'].includes(S.route)) await db.publishProfileStats(S.sessions,S.manualSets,S.programs).catch(()=>{});
     activity.pulse();
     if (S.route !== "editor" && !modal.open && !busy) render(); else updateSyncNotice();
     toast("З’єднання відновлено. Дані синхронізовано.");
@@ -4581,6 +4758,7 @@ async function handleUser(user) {
   S.isOwner = false;
   S.nutritionInput={...generatorDefaults};S.nutritionResult=null;S.nutritionHydrated=false;S.nutritionShopping=false;S.nutritionEditing=false;S.nutritionChecked=[];
   S.nutritionPlans=[]; S.nutritionAccess=false; S.nutritionError=""; S.nutritionId=""; S.nutritionDay=0;
+  S.trainingProfiles=[defaultTrainingProfile()];S.trainingProfilesStoredIds=[];S.activeTrainingProfileId=defaultProfileId;S.trainingProfileLimit=3;S.trainingProfilesError='';
   S.homeAccess = false;
   S.customizationAccess=false;
   S.adminAccess = {};
@@ -4668,7 +4846,7 @@ async function loadCommunityInBackground(isCurrent, synced) {
     synced.then((success) => {
       if (!success || !isCurrent()) return;
       S.publicProfileReady = ready;
-      if (ready && !['nutrition','achievements'].includes(S.route)) return db.publishProfileStats(S.sessions,S.manualSets);
+      if (ready && !['nutrition','achievements'].includes(S.route)) return db.publishProfileStats(S.sessions,S.manualSets,S.programs);
     }).catch((error) => console.warn('Статистика профілю:', error.code));
   }
   if (!S.communityLoading || !isCurrent()) return;
@@ -4719,6 +4897,7 @@ document.addEventListener('change',event=>{
 document.addEventListener('change',event=>{
   const input=event.target;
   if(input.id==='rep-record-count') {const count=Number(input.value);if(!Number.isInteger(count)||count<1||count>1000){input.setCustomValidity('Вкажи від 1 до 1000 повторень.');input.reportValidity();return;}input.setCustomValidity('');S.recordReps=count;render();}
+  if(input.id==='public-activity-year'){const year=Number(input.value);if(Number.isInteger(year)&&year>=1900&&year<=2200){S.publicActivityYear=year;render();}}
   if(input.id==='activity-year') {const year=Number(input.value);if(year>=1900&&year<=2200){S.activityYear=year;render();}}
 });
 document.addEventListener('keydown',event=>{
