@@ -12,7 +12,8 @@ export function measurementData(input, now = new Date()) {
   const date = String(input.date || ''), parsed = new Date(`${date}T12:00:00`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) || localDate(parsed) !== date || date < '1900-01-01' || date > localDate(now))
     throw Error('Обери коректну дату не пізніше сьогодні.');
-  const result = { date };
+  if(input.profileId!==undefined&&!/^profile-[1-5]$/.test(String(input.profileId)))throw Error('Некоректний профіль замірів.');
+  const result = { date,...(input.profileId?{profileId:input.profileId}:{}) };
   for (const [key, config] of Object.entries(measurementFields)) {
     const raw = input[key];
     if (raw === undefined || raw === null || String(raw).trim() === '') continue;

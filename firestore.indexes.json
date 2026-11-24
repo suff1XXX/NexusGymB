@@ -1,24 +1,94 @@
 {
-  "indexes": [{
-    "collectionGroup": "gymBros",
-    "queryScope": "COLLECTION",
-    "fields": [{ "fieldPath": "members", "arrayConfig": "CONTAINS" }, { "fieldPath": "status", "order": "ASCENDING" }]
-  }, {
-    "collectionGroup": "meetingPolls",
-    "queryScope": "COLLECTION",
-    "fields": [{"fieldPath":"members","arrayConfig":"CONTAINS"},{"fieldPath":"createdAt","order":"DESCENDING"}]
-  }, {
-    "collectionGroup": "gymChallenges",
-    "queryScope": "COLLECTION",
-    "fields": [{"fieldPath":"members","arrayConfig":"CONTAINS"},{"fieldPath":"createdAt","order":"DESCENDING"}]
-  }, {
-    "collectionGroup": "achievementScores",
-    "queryScope": "COLLECTION",
-    "fields": [{"fieldPath":"score","order":"DESCENDING"},{"fieldPath":"customId","order":"ASCENDING"}]
-  }],
-  "fieldOverrides": [{"collectionGroup":"comments","fieldPath":"authorId","indexes":[
-    {"order":"ASCENDING","queryScope":"COLLECTION"},
-    {"order":"DESCENDING","queryScope":"COLLECTION"},
-    {"order":"ASCENDING","queryScope":"COLLECTION_GROUP"}
-  ]}]
+  "indexes": [
+    {
+      "collectionGroup": "gymBros",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "members",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "meetingPolls",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "members",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "gymChallenges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "members",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "achievementScores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "score",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "customId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "supportThreads",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "userId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updatedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "comments",
+      "fieldPath": "authorId",
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "DESCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    }
+  ]
 }

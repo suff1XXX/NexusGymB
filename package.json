@@ -18,7 +18,19 @@
     "serve": "node tools/preview.mjs",
     "build:editor": "esbuild public/js/rich-editor.js --bundle --format=esm --target=es2022 --minify --legal-comments=inline --outfile=public/js/rich-editor.bundle.js",
     "pretest:browser": "npm run build:editor",
-    "prestart": "npm run build:editor"
+    "prestart": "npm run build:editor",
+    "test:calendar-privacy-browser": "node tests/calendar-privacy.browser.mjs",
+    "test:calendar-privacy-rules": "firebase emulators:exec --only firestore --project demo-nexus-calendar-privacy \"node tests/calendar-privacy.rules.mjs\"",
+    "prepare:weight-details-rules": "node scripts/update-weight-details-rules.mjs",
+    "prepare:calendar-privacy-rules": "node scripts/update-calendar-privacy-rules.mjs",
+    "test:training-profiles-rules": "firebase emulators:exec --only firestore --project demo-nexus-training-profiles \"node tests/training-profiles.rules.mjs\"",
+    "prepare:training-profiles-rules": "node scripts/update-training-profiles-rules.mjs",
+    "prepare:workout-results-rules": "node scripts/update-workout-results-rules.mjs",
+    "test:workout-results-browser": "node tests/workout-results.browser.mjs",
+    "test:auth-browser": "node tests/auth-page.browser.mjs",
+    "deploy:rules": "firebase deploy --only firestore:rules --project nexus-gymb",
+    "deploy:database": "firebase deploy --only firestore:rules,firestore:indexes --project nexus-gymb",
+    "deploy:hosting": "firebase deploy --only hosting --project nexus-gymb"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

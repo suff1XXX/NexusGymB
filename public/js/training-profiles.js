@@ -1,3 +1,4 @@
+import {repsLabel} from './repetitions.js';
 import { weightDetails, validWeightDetails, sameWeightDetails } from './weight-details.js';
 import { validSetPlans } from './model.js';
 
@@ -83,7 +84,7 @@ export function applyTrainingProfile(session,profile) {
   const s=structuredClone(session),context=profileContext(profile.id);
   for (const [index,item] of s.items.entries()) {
     const count=s.logs.filter(log=>log.index === index && !log.warmup && !log.quickResult && log.dropOf === undefined).length;
-    if (s.simpleCompleted?.includes(index) || count >= item.sets) continue;
+    if (s.simpleCompleted?.includes(index) || (s.setTrackingMode==='free'?s.freeCompleted?.includes(index):count >= item.sets)) continue;
     const load=profile.loads[key(item)];
     // Unlabelled legacy plans belong to the default profile. A new profile starts fresh.
     const keepLegacy=!item.machine && profile.id === defaultProfileId;
@@ -113,9 +114,12 @@ export function completedProfileLoads(session,profiles,limit=3,now=Date.now()) {
     for (const profile of availableProfiles(profiles,limit)) {
       const logs=session.logs.filter(log=>log.index === index && !log.warmup && !log.quickResult && log.dropOf === undefined &&
         (contextProfileId(log.machine) || (!log.machine?defaultProfileId:'')) === profile.id);
-      if (logs.length !== item.sets || logs.some(log=>log.weightUnknown || !sameWeightDetails(log,logs[0]))) continue;
-      const plans=logs.map((log,k)=>({reps:item.reps,seconds:item.seconds,rest:item.rest,...item.setPlans?.[k],...weightDetails(log),weight:log.weight}));
-      updated.set(profile.id,withProfileLoad(updated.get(profile.id)||profile,{...item,...weightDetails(logs[0]),weight:plans[0].weight,reps:plans[0].reps,setPlans:plans},now));
+      const free=session.setTrackingMode==='free';
+      if (logs.length < (free?1:item.sets)) continue;
+      const plannedLogs=free?logs.slice(-Math.min(logs.length,item.sets)):logs.slice(0,item.sets);
+      if (plannedLogs.some(log=>log.weightUnknown || !sameWeightDetails(log,plannedLogs[0]))) continue;
+      const plans=plannedLogs.map((log,k)=>({reps:item.reps,seconds:item.seconds,rest:item.rest,...item.setPlans?.[k],...weightDetails(log),weight:log.weight,...(free?{reps:repsLabel(log)}:{})}));
+      updated.set(profile.id,withProfileLoad(updated.get(profile.id)||profile,{...item,sets:free?plans.length:item.sets,...weightDetails(plannedLogs[0]),weight:plans[0].weight,reps:plans[0].reps,setPlans:plans},now));
     }
   }
   return [...updated.values()];

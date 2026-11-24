@@ -21,7 +21,8 @@ export function weightLabel(log) {
 export function simpleDone(session, index) {
   if (session?.status !== 'active' || !Number.isInteger(index) || !session.items[index]) throw Error('Вправу не знайдено.');
   const s = copy(session), done = new Set(s.simpleCompleted || []);
-  if (done.has(index)) done.delete(index); else done.add(index);
+  if(s.freeCompleted?.includes(index)){s.freeCompleted=s.freeCompleted.filter(value=>value!==index);done.delete(index);}
+  else if (done.has(index)) done.delete(index); else done.add(index);
   s.simpleCompleted = [...done];
   return s;
 }
@@ -39,7 +40,7 @@ export function saveQuickResult(session, index, reps, value, details=null) {
 export function finishChecklist(session) {
   if (session?.status !== 'active') throw Error('Немає активного тренування.');
   const done = new Set(session.simpleCompleted || []);
-  const skipped = session.items.flatMap((item, index) => done.has(index) || session.logs.filter(l => l.index === index && isWorkingSet(l)).length >= item.sets ? [] : [index]);
+  const skipped = session.items.flatMap((item, index) => done.has(index) || session.logs.filter(l => l.index === index && isWorkingSet(l)).length >= (session.setTrackingMode==='free'?1:item.sets) ? [] : [index]);
   return { ...copy(session), skipped, status: 'completed', index: session.items.length, endedAt: Date.now(), restEnd: 0, timerEnd: 0 };
 }
 

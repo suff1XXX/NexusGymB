@@ -45,8 +45,9 @@ export function replaceForToday(session,index,exercise,reason='busy') {
   if(!exercise?.id||!exercise.name||!Object.hasOwn(replacementReasons,reason))throw Error('Перевір вправу й причину заміни.');
   const s=copy(session),original=s.replacements?.[index]?.original||copy(s.items[index]),snapshot=copy(exercise);delete snapshot.id;
   s.replacements={...s.replacements,[index]:{original,replacementId:exercise.id,reason}};
-  s.items[index]={...s.items[index],exerciseId:exercise.id,name:exercise.name,primary:exercise.primary||'',snapshot,custom:false,weight:0};
-  if(s.items[index].setPlans)s.items[index].setPlans=s.items[index].setPlans.map(plan=>({...plan,weight:0}));
+  s.items[index]={...s.items[index],exerciseId:exercise.id,name:exercise.name,primary:exercise.primary||'',snapshot,custom:false,...weightDetails(exercise),weight:0};
+  delete s.items[index].alternativeExercise;
+  if(s.items[index].setPlans)s.items[index].setPlans=s.items[index].setPlans.map(plan=>({...plan,...weightDetails(exercise),weight:0}));
   return s;
 }
 export function restoreForToday(session,index) {

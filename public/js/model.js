@@ -184,6 +184,7 @@ export function validProgram(p) {
             !!i && typeof i.name === "string" &&
             i.name.trim() &&
             i.name.length <= 100 &&
+            (i.alternativeExercise === undefined || (i.alternativeExercise && typeof i.alternativeExercise.id === 'string' && /^(personal:)?[A-Za-z0-9_-]{1,128}$/.test(i.alternativeExercise.id) && i.alternativeExercise.id !== i.exerciseId && typeof i.alternativeExercise.name === 'string' && i.alternativeExercise.name.trim().length > 0 && i.alternativeExercise.name.length <= 100 && typeof i.alternativeExercise.primary === 'string' && i.alternativeExercise.primary.length <= 100 && typeof i.alternativeExercise.equipment === 'string' && i.alternativeExercise.equipment.length <= 200)) &&
             (i.machine === undefined || typeof i.machine === "string" && i.machine.length <= 80) &&
             Number.isInteger(i.sets) &&
             i.sets >= 1 &&
@@ -223,22 +224,28 @@ export function completeSet(session, reps, weight, metrics = [], warmup = false,
     metrics.some((m, k) => m.name !== planned[k].name || m.unit !== planned[k].unit)
   )
     throw Error("Параметри не відповідають вправі");
-  if (!warmup && workingSetCount(s) >= item.sets)
-    throw Error("Усі підходи вже виконано");
-  if (warmup && s.logs.filter((l) => l.index === s.index && l.warmup).length >= 20)
-    throw Error("Можна записати до 20 розминочних підходів на вправу.");
   const plan = setPlan(item, Math.min(workingSetCount(s), item.sets - 1));
   s.logs.push({ index: s.index, ...repetitions, ...loadDetails, machine: machineName(item.machine || ''), weight, seconds: plan.seconds, metrics: copy(metrics), at: Date.now() });
   if (warmup) s.logs.at(-1).warmup = true;
   s.timerEnd = 0;
   s.restEnd = Date.now() + plan.rest * 1000;
-  if (!warmup) continueSuperset(s,s.index);
+  if(!warmup&&s.setTrackingMode==='free') {
+    s.freeCompleted=(s.freeCompleted||[]).filter(index=>index!==s.index);
+    s.skipped=s.skipped.filter(index=>index!==s.index);
+    s.simpleCompleted=(s.simpleCompleted||[]).filter(index=>index!==s.index);
+  }
+  if (!warmup&&s.setTrackingMode!=='free') continueSuperset(s,s.index);
   return s;
 }
 export function advance(session, skip = false) {
   const s = copy(session);
   if (skip && !s.skipped.includes(s.index)) s.skipped.push(s.index);
-  if (s.items[s.index]?.superset) {
+  if(s.setTrackingMode==='free') {
+    if(!skip&&workingSetCount(s)>0)s.freeCompleted=[...new Set([...(s.freeCompleted||[]),s.index])];
+    else if(!s.skipped.includes(s.index)&&!s.simpleCompleted?.includes(s.index))s.skipped.push(s.index);
+    s.index++;
+    while(s.index<s.items.length&&(s.skipped.includes(s.index)||s.freeCompleted?.includes(s.index)||s.simpleCompleted?.includes(s.index)))s.index++;
+  } else if (s.items[s.index]?.superset) {
     const pending=s.items.findIndex((item,index)=>!s.skipped.includes(index) && !s.simpleCompleted?.includes(index) && workingSetCount(s,index) < item.sets);
     s.index=pending < 0 ? s.items.length : pending;
   } else {
@@ -257,7 +264,7 @@ export function finishEarly(session) {
   if (session?.status !== 'active') throw Error('Немає активного тренування.');
   const s = copy(session);
   s.items.forEach((item, index) => {
-    if (!s.simpleCompleted?.includes(index) && workingSetCount(s, index) < item.sets && !s.skipped.includes(index)) s.skipped.push(index);
+    if (!s.simpleCompleted?.includes(index) && workingSetCount(s, index) < (s.setTrackingMode==='free'?1:item.sets) && !s.skipped.includes(index)) s.skipped.push(index);
   });
   return { ...s, status: 'completed', endedEarly: true, index: s.items.length,
     endedAt: Date.now(), timerEnd: 0, restEnd: 0 };

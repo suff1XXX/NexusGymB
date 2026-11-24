@@ -47,6 +47,13 @@ export function continueSuperset(session, performedIndex) {
   const partner=supersetPartner(session.items,performedIndex);
   if (partner < 0 || session.skipped?.includes(partner) || session.simpleCompleted?.includes(partner)) return session;
   const own=count(session,performedIndex), other=count(session,partner);
+  const extraRound=own>session.items[performedIndex].sets||other>session.items[partner].sets;
+  if(extraRound&&own>=session.items[performedIndex].sets&&other>=session.items[partner].sets) {
+    session.index=partner;
+    if(other<own)session.restEnd=0;
+    if(session.executionMode==='mixed')session.detailedIndex=[partner];
+    return session;
+  }
   if (other < own && other < session.items[partner].sets) {
     session.index=partner;session.restEnd=0;
   } else if (own < session.items[performedIndex].sets) {
@@ -83,7 +90,7 @@ export function nextWeightSuggestion(sessions, item, {currentId='', beforeDate='
   const unavailable=reason=>({status:'unavailable',weights:[],reason});
   if (item.seconds) return unavailable('Підказка доступна для вправ із вагою та повтореннями.');
   const latest=sessions.filter(s=>s.status === 'completed' && s.id !== currentId && s.date <= beforeDate && (s.date < beforeDate || (s.endedAt || 0) <= beforeEnd))
-    .map(session=>({session,logs:session.logs.filter(log=>isWorkingSet(log) && session.items[log.index] && key(session.items[log.index]) === key(item) && sameMachine(log,item.machine || '') && sameWeightDetails(log,item))}))
+    .map(session=>({session,logs:session.logs.filter(log=>isWorkingSet(log) && session.items[log.index] && key(session.items[log.index]) === key(item) && sameMachine(log,item.machine || '') && sameWeightDetails(log,item)).slice(0,item.sets)}))
     .filter(entry=>entry.logs.length).sort((a,b)=>b.session.date.localeCompare(a.session.date) || (b.session.endedAt||0)-(a.session.endedAt||0))[0];
   if (!latest) return unavailable('Спершу заверши тренування у цьому профілі з записаними підходами.');
   if (latest.logs.length !== item.sets) return unavailable('В останньому тренуванні інша кількість підходів. Потрібен повний запис за поточним планом.');

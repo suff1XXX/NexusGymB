@@ -21,7 +21,7 @@ export function workoutSummary(session, sessions = []) {
     volume:working.reduce((sum,l)=>sum+(l.weightUnknown || l.quickResult ? 0 : totalWeight(l)*l.reps),0),
     exercises:new Set([...working.map((l)=>l.index), ...(session.simpleCompleted || [])]).size,
     plannedExercises:session.items.length,
-    plannedSets:session.executionMode === 'simple' ? 0 : session.items.reduce((sum,item)=>sum+item.sets,0),
+    plannedSets:session.executionMode === 'simple'||session.setTrackingMode==='free' ? 0 : session.items.reduce((sum,item)=>sum+item.sets,0),
     records,
     repetitionRecords:[5,8,10,12].flatMap(reps=>{
       const previous=new Map(repetitionRecords(earlier,reps,session.date).map(record=>[record.key,record]));

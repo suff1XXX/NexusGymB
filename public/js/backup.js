@@ -1,3 +1,4 @@
+import {profileRecordId} from './training-profile-data.js';
 import { trainingProfiles, validProfileId } from './training-profiles.js';
 import { validProgram, copy } from "./model.js";
 import { exerciseData } from "./import.js";
@@ -36,8 +37,8 @@ export function parseBackup(text) {
   if (!Array.isArray(rawMeasurements) || rawMeasurements.length > 5000 || !unique(rawMeasurements)) throw Error('Некоректні заміри в резервній копії.');
   const measurements = rawMeasurements.map((record)=>{
     const value=measurementData(record);
-    if (record.id !== value.date) throw Error('Некоректний ID запису замірів.');
-    return { id:value.date,...value };
+    if (record.id !== profileRecordId(value.profileId||'profile-1',value.date)) throw Error('Некоректний ID запису замірів.');
+    return { id:record.id,...value };
   });
   const rawManualSets=data.manualSets??[];
   if(!Array.isArray(rawManualSets)||rawManualSets.length>5000||!unique(rawManualSets))throw Error('Некоректні ручні підходи в резервній копії.');

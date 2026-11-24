@@ -13,6 +13,6 @@ export function inviteSession(invite, id, uid, now = new Date()) {
   if (![invite.from, invite.to].includes(uid)) throw Error('Немає доступу до запрошення.');
   if (invite.date < localDate(now)) throw Error('Дата запрошення вже минула.');
   return { ...plannedSession(shareableProgram(invite.program), invite.date, now), id: `invite_${id}`,
-    invitationId: id, gymBroId: invite.from === uid ? invite.to : invite.from, scheduledTime: invite.time || '',
+    invitationId: id, gymBroId: invite.from === uid ? invite.to : invite.from, scheduledTime: invite.time || '',scheduledTimeZone:'Europe/Kyiv',
     invitationNote: invite.note || '' };
 }

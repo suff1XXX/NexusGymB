@@ -149,3 +149,9 @@ body[data-page="session"] #toast { width:max-content; max-width:calc(100% - 32px
   .workout-secondary-actions { justify-content:center; } .workout-outline ol { grid-template-columns:1fr; } .workout-outline li { padding:12px 0; } .workout-studio .workout-exercise-info { padding:16px 18px; } .workout-finish { margin-top:22px; } .workout-list-heading { margin-top:26px; }
 }
 @media(prefers-reduced-motion:reduce) { .workout-progress>span { transition:none; } }
+
+.extra-set-label { display: block; font-size: .875rem; color: var(--blue); font-weight: 500; margin-top: 3px; }
+.workout-extra-help { padding: 12px 16px; border-radius: 12px; background: var(--soft); line-height: 1.6; }
+
+.set-tracking-controls { margin-bottom: 24px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }.set-tracking-options { display: inline-flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }.set-tracking-options button { border: 0; border-radius: 8px; padding: 10px 14px; min-height: 42px; font: inherit; font-size: .875rem; color: var(--muted); background: transparent; cursor: pointer; }.set-tracking-options button[aria-pressed="true"] { color: var(--blue); background: var(--soft); font-weight: 650; }.set-tracking-options button:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }.set-tracking-controls > p { color: var(--muted); font-size: .875rem; margin: 12px 0 0; line-height: 1.65; }.time-budget-session-badge { border: 1px solid var(--line); background: var(--soft); color: var(--blue); padding: 10px 14px; border-radius: 12px; font-size: .875rem; align-self: center; }
+@media(max-width:520px) { .set-tracking-options { display: flex; }.set-tracking-options button { flex: 1; }.set-tracking-controls { padding: 12px; } }

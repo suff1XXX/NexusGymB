@@ -11,6 +11,7 @@ export function shareableProgram(input) {
       const result = {};
       for (const key of ["name", "sets", "reps", "seconds", "weight", "rest", "note", "metrics", "setPlans", "builderFeatures"])
         if (item[key] !== undefined) result[key] = copy(item[key]);
+      if(item.alternativeExercise && !item.alternativeExercise.id.startsWith('personal:')) result.alternativeExercise=copy(item.alternativeExercise);
       if (typeof item.primary === "string") result.primary = item.primary.slice(0, 100);
       if (typeof item.exerciseId === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(item.exerciseId)) result.exerciseId = item.exerciseId;
       if (item.custom || item.exerciseId?.startsWith?.("personal:")) result.custom = true;

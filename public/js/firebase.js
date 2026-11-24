@@ -300,13 +300,15 @@ async function initialize() {
       return invitationId;
     },
     async weeklyGoals() {
-      requireOnline();return (await C.getDocsFromServer(C.query(C.collection(db,`users/${auth.currentUser.uid}/weeklyGoals`),C.orderBy('week','desc'),C.limit(12)))).docs.map(doc=>({...doc.data(),id:doc.id}));
+      requireOnline();return (await C.getDocsFromServer(C.query(C.collection(db,`users/${auth.currentUser.uid}/weeklyGoals`),C.orderBy('week','desc'),C.limit(60)))).docs.map(doc=>({...doc.data(),id:doc.id}));
     },
-    async saveWeeklyGoal(week,target) {
+    async saveWeeklyGoal(week,target,profileId='profile-1') {
       requireOnline();target=Number(target);
       if(weekStart(week)!==week||!Number.isInteger(target)||target<1||target>14)throw Error('Ціль: від 1 до 14 тренувань на тиждень.');
-      await commit([{kind:'save',path:`users/${auth.currentUser.uid}/weeklyGoals/${week}`,data:{week,target,updatedAt:C.serverTimestamp()}}]);
-      return {week,target,id:week};
+      if(!/^profile-[1-5]$/.test(profileId))throw Error('Некоректний профіль тренувань.');
+      const id=profileId==='profile-1'?week:`${profileId}_${week}`;
+      await commit([{kind:'save',path:`users/${auth.currentUser.uid}/weeklyGoals/${id}`,data:{week,target,profileId,updatedAt:C.serverTimestamp()}}]);
+      return {week,target,profileId,id};
     },
     async saveWorkoutReflection(id,value) {
       requireOnline();const data=reflectionData(value);
@@ -451,6 +453,15 @@ async function initialize() {
       await B.getIdToken(auth.currentUser, true);
       return auth.currentUser;
     },
+    async prepareAccess() {
+      const user = auth.currentUser;
+      if (!user || !navigator.onLine) return;
+      // Firestore reads the token claim, not the cached Auth user property.
+      const token = await B.getIdTokenResult(user);
+      if ((token.claims.email_verified === true) !== user.emailVerified) {
+        await B.getIdToken(user, true);
+      }
+    },
     async resetPassword(email) {
       try {
         await B.sendPasswordResetEmail(auth, email, actionSettings());
@@ -592,6 +603,45 @@ async function initialize() {
       ]);
       for (let index = 0; index < operations.length && auth.currentUser?.uid === uid; index += 6)
         await commit(operations.slice(index, index + 6));
+    },
+    async supportThreads() {
+      requireOnline();
+      const collection=C.collection(db,'supportThreads'),admin=auth.currentUser.uid===OWNER_UID;
+      const query=admin?C.query(collection,C.orderBy('updatedAt','desc'),C.limit(50)):C.query(collection,C.where('userId','==',auth.currentUser.uid),C.orderBy('updatedAt','desc'),C.limit(50));
+      return (await timeout(C.getDocsFromServer(query))).docs.map(doc=>({...doc.data(),id:doc.id}));
+    },
+    async supportThread(id) {
+      requireOnline();if(!/^[a-f0-9-]{36}$/.test(id))throw Error('Звернення не знайдено.');
+      const snapshot=await timeout(C.getDocFromServer(C.doc(db,`supportThreads/${id}`)));
+      if(!snapshot.exists())throw Error('Звернення не знайдено.');return {...snapshot.data(),id:snapshot.id};
+    },
+    async createSupportThread(value) {
+      requireOnline();
+      const email=String(value.email||'').trim(),subject=String(value.subject||'').trim(),body=String(value.body||'').trim(),category=String(value.category||'technical');
+      if(email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))throw Error('Вкажи коректну електронну пошту.');
+      if(!subject||subject.length>120||!body||body.length>4000||!['technical','cooperation','other'].includes(category))throw Error('Вкажи тему до 120 символів і повідомлення до 4000 символів.');
+      const id=crypto.randomUUID(),uid=auth.currentUser.uid,admin=uid===OWNER_UID,authorName=String(auth.currentUser.displayName||'Спортсмен').slice(0,100);
+      await commit([{kind:'save',path:`supportThreads/${id}`,data:{userId:uid,email,subject,category,status:'open',createdAt:C.serverTimestamp(),updatedAt:C.serverTimestamp(),lastSenderId:uid,lastMessageId:'initial'}},
+        {kind:'save',path:`supportThreads/${id}/messages/initial`,data:{authorId:uid,authorName,authorRole:admin?'admin':'user',body,createdAt:C.serverTimestamp()}}]);
+      return id;
+    },
+    async replySupportThread(id,text) {
+      requireOnline();const body=String(text||'').trim();if(!body||body.length>4000)throw Error('Повідомлення — від 1 до 4000 символів.');
+      const thread=await api.supportThread(id),uid=auth.currentUser.uid,admin=uid===OWNER_UID;
+      if(!admin&&thread.userId!==uid)throw Error('Немає доступу до цього листування.');
+      const messageId=crypto.randomUUID(),authorName=String(auth.currentUser.displayName||'Спортсмен').slice(0,100);
+      await commit([{kind:'save',path:`supportThreads/${id}/messages/${messageId}`,data:{authorId:uid,authorName,authorRole:admin?'admin':'user',body,createdAt:C.serverTimestamp()}},
+        {kind:'patch',path:`supportThreads/${id}`,data:{status:'open',updatedAt:C.serverTimestamp(),lastSenderId:uid,lastMessageId:messageId}}]);
+    },
+    watchSupportMessages(id,onChange,onError) {
+      return C.onSnapshot(C.query(C.collection(db,`supportThreads/${id}/messages`),C.orderBy('createdAt','desc'),C.limit(100)),snapshot=>onChange(snapshot.docs.map(doc=>({...doc.data(),id:doc.id})).reverse()),onError);
+    },
+    watchSupportThread(id,onChange,onError) {
+      return C.onSnapshot(C.doc(db,`supportThreads/${id}`),snapshot=>{if(snapshot.exists())onChange({...snapshot.data(),id:snapshot.id});},onError);
+    },
+    async setSupportStatus(id,status) {
+      requireOnline();if(auth.currentUser.uid!==OWNER_UID||!['open','resolved'].includes(status))throw Error('Немає доступу.');
+      await commit([{kind:'patch',path:`supportThreads/${id}`,data:{status,updatedAt:C.serverTimestamp()}}]);
     },
     async profileComments(uid) {
       requireOnline();
