@@ -19,10 +19,18 @@ export const achievementCatalog = [
   {id:'ten-comments',name:'Голос спільноти',category:'site',metric:'comments',target:10,points:65,tier:'silver',icon:'message',description:'Опублікуй 10 коментарів або відповідей.'},
   {id:'seven-days',name:'Завжди поруч',category:'site',metric:'activeDays',target:7,points:60,tier:'silver',icon:'calendar',description:'Користуйся GymB у 7 різних днях після запуску досягнень.'},
   {id:'thirty-days',name:'Частина GymB',category:'site',metric:'activeDays',target:30,points:180,tier:'gold',icon:'flame',description:'Користуйся GymB у 30 різних днях після запуску досягнень.'},
+  {id:'forty-five-days',name:'45 днів у ритмі',category:'site',metric:'activeDays',target:45,points:250,tier:'gold',icon:'flame',description:'Користуйся GymB у 45 різних днях. Дні не обов’язково мають іти поспіль: відпочинок не скидає прогрес.'},
+  {id:'ninety-days',name:'90 днів характеру',category:'site',metric:'activeDays',target:90,points:500,tier:'platinum',icon:'trophy',description:'Користуйся GymB у 90 різних днях. Один день дає один крок прогресу, незалежно від кількості входів.'},
   {id:'ceo-praise',name:'Похвала від CEO',hidden:true,manualOnly:true,category:'special',target:1,points:300,tier:'platinum',icon:'star',description:'Особиста відзнака від CEO GymB. Видається через адміністратора.'},
   {id:'best-gymbro',name:'Найкращий GymBro',category:'sport',metric:'sharedWorkouts',target:5,points:150,tier:'gold',icon:'people',description:'Заверши 5 спільних тренувань із GymBro за прийнятими запрошеннями. Кожне тренування мають завершити обидва учасники.'},
   {id:'bad-gymbro',name:'Фіговий GymBro',hidden:true,manualOnly:true,category:'special',target:1,points:0,tier:'bronze',icon:'message',description:'Особлива відзнака від адміністратора. Не додає балів до рейтингу.'},
   {id:'gymbro-challenge',name:'Виклик прийнято',category:'sport',metric:'challenges',target:1,points:100,tier:'gold',icon:'trophy',description:'Завершіть із GymBro спільний виклик: обидва учасники мають виконати свою ціль у вибраний період.'},
+  {id:'hundred-workouts',name:'Сотня тренувань',category:'sport',metric:'workouts',target:100,points:750,tier:'platinum',icon:'trophy',description:'Заверши 100 тренувань із виконаною вправою.'},
+  {id:'two-fifty-workouts',name:'250 тренувань',category:'sport',metric:'workouts',target:250,points:1500,tier:'platinum',icon:'trophy',description:'Заверши 250 тренувань із виконаною вправою. Заплановані й порожні тренування не враховуються.'},
+  {id:'two-thousand-five-hundred-sets',name:'2 500 підходів',category:'sport',metric:'sets',target:2500,points:700,tier:'gold',icon:'dumbbell',description:'Запиши 2 500 робочих підходів у завершених тренуваннях. Розминка, дропи та дублювання найкращого результату не враховуються.'},
+  {id:'million-volume',name:'Тисяча тонн',category:'sport',metric:'volume',target:1000000,points:1000,tier:'platinum',icon:'dumbbell',description:'Набери 1 000 000 кг × повторення сумарного робочого обсягу у завершених тренуваннях із відомою вагою.'},
+  {id:'twenty-six-weeks',name:'Пів року регулярності',category:'sport',metric:'bestStreak',target:26,points:1200,tier:'platinum',icon:'flame',description:'Завершуй хоча б одне тренування щотижня протягом 26 тижнів поспіль. Дні відпочинку всередині тижня не переривають серію.'},
+  {id:'fifty-shared-workouts',name:'50 тренувань із GymBro',category:'sport',metric:'sharedWorkouts',target:50,points:900,tier:'platinum',icon:'people',description:'Заверши 50 спільних тренувань за прийнятими запрошеннями. Кожне тренування мають завершити обидва учасники.'},
 ];
 export const maxAchievementScore = achievementCatalog.reduce((sum,medal)=>sum+medal.points,0);
 const validDate = value=>typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;
@@ -40,7 +48,7 @@ export function achievementFacts({sessions=[],programs=[],exercises=[],friends=[
         ['quickResult','weightUnknown','warmup'].some(key=>log[key]!==undefined&&typeof log[key]!=='boolean') ||
         !Number.isFinite(log.weight) || log.weight<0 || log.weight>1000 || !(log.reps>0 || Number(log.seconds)>0))continue;
       performed.add(log.index);
-      if(log.quickResult)continue;
+      if(log.quickResult || log.dropOf!==undefined)continue;
       const count=counts.get(log.index)||0;
       if(!Number.isInteger(item.sets)||count>=Math.min(item.sets,20))continue;
       counts.set(log.index,count+1);sets++;
@@ -63,7 +71,7 @@ export function achievementFacts({sessions=[],programs=[],exercises=[],friends=[
     friends:new Set(friends.filter(f=>f.status==='accepted'&&Array.isArray(f.members)&&f.members.includes(uid)).map(f=>f.members.find(id=>id!==uid)).filter(Boolean)).size,
     profileComplete:Number(present(profile.photo)&&present(profile.bio)&&present(profile.location)),
     comments:comments.filter(c=>c.authorId===uid&&present(c.text)).length,
-    activeDays:Math.max(0,Math.min(30,Number.isFinite(activeDays)?Math.floor(activeDays):0)),
+    activeDays:Math.max(0,Math.min(90,Number.isFinite(activeDays)?Math.floor(activeDays):0)),
   };
 }
 export function evaluateAchievements(facts={},manualIds=[]) {

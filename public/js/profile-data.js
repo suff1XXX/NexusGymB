@@ -14,7 +14,7 @@ export function sharedRecords(records, preference = null) {
 export function recordSharingKeys(records, preference, legacyVisible) {
   return preference===null?(legacyVisible?records.slice(0,200).map(record=>record.key):[]):[...new Set(preference.visibleKeys||[])];
 }
-export function profileSnapshots(sessions, recordPreference = null, manualSets = [],person={},programs=[]) {
+export function profileSnapshots(sessions, recordPreference = null, manualSets = [],person={},programs=[],streakSessions=sessions) {
   const completed = sessions.filter(countsAsWorkout);
   const allProgress = progressSessions(completed, manualSets);
   const logs = allProgress.flatMap((s) => s.logs.filter((l) => !l.warmup && !l.quickResult));
@@ -22,7 +22,7 @@ export function profileSnapshots(sessions, recordPreference = null, manualSets =
     calendar:calendarSnapshot(sessions,person,programs),
     progress: { workouts: completed.length, sets: logs.filter(isWorkingSet).length, volume: logs.reduce((sum, l) => sum + (l.weightUnknown ? 0 : l.reps * totalWeight(l)), 0) },
     records: { items: sharedRecords(personalRecords(allProgress), recordPreference), ...(Number.isInteger(recordPreference?.revision)?{visibilityVersion:recordPreference.revision}:{}) },
-    streak: { ...trainingStreak(completed), lastWorkoutDate: completed.map((s) => s.date).sort().at(-1) || '' },
+    streak: { ...trainingStreak(streakSessions.filter(countsAsWorkout)), lastWorkoutDate: streakSessions.filter(countsAsWorkout).map((s) => s.date).sort().at(-1) || '' },
   };
 }
 export function commentThreads(comments) {

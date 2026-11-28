@@ -45,7 +45,7 @@ export function configureSuperset(session, index, partner = -1) {
 // Alternate A1 → B1 → A2 → B2. Rest starts after both exercises in a round.
 export function continueSuperset(session, performedIndex) {
   const partner=supersetPartner(session.items,performedIndex);
-  if (partner < 0 || session.skipped?.includes(partner) || session.simpleCompleted?.includes(partner)) return session;
+  if (partner < 0 || session.deferred?.includes(partner) || session.skipped?.includes(partner) || session.simpleCompleted?.includes(partner)) return session;
   const own=count(session,performedIndex), other=count(session,partner);
   const extraRound=own>session.items[performedIndex].sets||other>session.items[partner].sets;
   if(extraRound&&own>=session.items[performedIndex].sets&&other>=session.items[partner].sets) {

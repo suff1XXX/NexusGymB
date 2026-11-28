@@ -1,3 +1,4 @@
+import {nextExerciseChoices,finalizeSkipped} from './workout-queue.js';
 import { weightDetails, validWeightDetails } from './weight-details.js';
 import { isWorkingSet, validSupersets, continueSuperset } from './training-methods.js';
 import { parseReps, machineName } from './repetitions.js';
@@ -234,6 +235,7 @@ export function completeSet(session, reps, weight, metrics = [], warmup = false,
     s.skipped=s.skipped.filter(index=>index!==s.index);
     s.simpleCompleted=(s.simpleCompleted||[]).filter(index=>index!==s.index);
   }
+  if(!warmup){if(s.skipDetails)delete s.skipDetails[s.index];s.deferred=(s.deferred||[]).filter(index=>index!==s.index);}
   if (!warmup&&s.setTrackingMode!=='free') continueSuperset(s,s.index);
   return s;
 }
@@ -243,22 +245,17 @@ export function advance(session, skip = false) {
   if(s.setTrackingMode==='free') {
     if(!skip&&workingSetCount(s)>0)s.freeCompleted=[...new Set([...(s.freeCompleted||[]),s.index])];
     else if(!s.skipped.includes(s.index)&&!s.simpleCompleted?.includes(s.index))s.skipped.push(s.index);
-    s.index++;
-    while(s.index<s.items.length&&(s.skipped.includes(s.index)||s.freeCompleted?.includes(s.index)||s.simpleCompleted?.includes(s.index)))s.index++;
-  } else if (s.items[s.index]?.superset) {
-    const pending=s.items.findIndex((item,index)=>!s.skipped.includes(index) && !s.simpleCompleted?.includes(index) && workingSetCount(s,index) < item.sets);
-    s.index=pending < 0 ? s.items.length : pending;
-  } else {
-    s.index++;
-    while (s.index < s.items.length && (s.skipped.includes(s.index) || s.simpleCompleted?.includes(s.index) || workingSetCount(s,s.index) >= s.items[s.index].sets)) s.index++;
   }
+  const pending=nextExerciseChoices(s,s.index);
+  s.index=pending[0]??s.items.length;
+  if(s.deferred)s.deferred=s.deferred.filter(index=>index!==s.index&&(!s.items[s.index]?.superset||s.items[index]?.superset!==s.items[s.index].superset));
   s.restEnd = 0;
   s.timerEnd = 0;
   if (s.index >= s.items.length) {
     s.status = "completed";
     s.endedAt = Date.now();
   }
-  return s;
+  return s.status==='completed'?finalizeSkipped(s):s;
 }
 export function finishEarly(session) {
   if (session?.status !== 'active') throw Error('Немає активного тренування.');
@@ -266,6 +263,6 @@ export function finishEarly(session) {
   s.items.forEach((item, index) => {
     if (!s.simpleCompleted?.includes(index) && workingSetCount(s, index) < (s.setTrackingMode==='free'?1:item.sets) && !s.skipped.includes(index)) s.skipped.push(index);
   });
-  return { ...s, status: 'completed', endedEarly: true, index: s.items.length,
-    endedAt: Date.now(), timerEnd: 0, restEnd: 0 };
+  return finalizeSkipped({ ...s, status: 'completed', endedEarly: true, index: s.items.length,
+    endedAt: Date.now(), timerEnd: 0, restEnd: 0 });
 }

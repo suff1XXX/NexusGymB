@@ -1,3 +1,4 @@
+import {nextTurnState,turnActionApplied} from './gymbro-turns.js';
 import { calendarSnapshot, calendarScopeLabels } from './calendar-privacy.js';
 import { profileName, trainingProfileLimit, trainingProfiles, profileData, defaultTrainingProfile } from './training-profiles.js';
 import {personalRecords} from './fitness.js';
@@ -33,9 +34,9 @@ async function initialize() {
     import(base + "firebase-firestore.js"),
   ]);
   const app = A.initializeApp(firebaseConfig),
-    auth = B.getAuth(app),
+    auth = B.initializeAuth(app,{persistence:[B.browserLocalPersistence,B.indexedDBLocalPersistence]}),
     db = C.getFirestore(app);
-  await B.setPersistence(auth, B.browserLocalPersistence);
+  await auth.authStateReady();
   const requireOnline = () => {
     if (!navigator.onLine)
       throw Error(
@@ -113,7 +114,7 @@ async function initialize() {
     return C.runTransaction(db,async tx=>{
       const previous=(await tx.get(ref)).data(),day=Math.floor(Date.now()/86400000);
       if(previous?.lastDay>=day)return false;
-      tx.set(ref,{count:Math.min(30,(previous?.count||0)+1),lastDay:day,updatedAt:C.serverTimestamp()});return true;
+      tx.set(ref,{count:Math.min(90,(previous?.count||0)+1),lastDay:day,updatedAt:C.serverTimestamp()});return true;
     });
   }
   async function refreshSpark(uid) {
@@ -730,7 +731,7 @@ async function initialize() {
         return {preference,visibility};
       });
     },
-    async setProfileVisibility(visibility,sessions,programs=[],manualSets=[]) {
+    async setProfileVisibility(visibility,sessions,programs=[],manualSets=[],streakSessions=sessions) {
       requireOnline();
       if (typeof visibility.calendar !== 'boolean' || !Object.hasOwn(calendarScopeLabels,visibility.calendarScope)) throw Error('Перевір видимість і типи тренувань у календарі.');
       const uid=auth.currentUser.uid,ref=C.doc(db,`publicProfiles/${uid}`);
@@ -738,23 +739,23 @@ async function initialize() {
       await C.runTransaction(db,async transaction=>{
         const [existing,preference]=await Promise.all([transaction.get(ref),transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`))]);
         if (!existing.exists()) throw Error('Спочатку завантаж профіль.');
-        const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,{visibility},programs);
+        const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,{visibility},programs,streakSessions);
         transaction.update(ref,{visibility});
         for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
       });
       return calendar;
     },
-    async publishProfileStats(sessions, manualSets = [],programs=[]) {
+    async publishProfileStats(sessions, manualSets = [],programs=[],streakSessions=sessions) {
       requireOnline();
       sessions = structuredClone(sessions);
-      manualSets = structuredClone(manualSets);programs=structuredClone(programs);
+      manualSets = structuredClone(manualSets);programs=structuredClone(programs);streakSessions=structuredClone(streakSessions);
       const uid = auth.currentUser.uid;
-      const signature = await statsSignature(sessions, manualSets, new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }),programs);
+      const signature = await statsSignature(sessions, manualSets, new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Kyiv' }),programs,streakSessions);
       return locked(`nexus-stats-${uid}`, () => publishOnce(localStorage, `nexus:published-stats:v2:${uid}`, signature, async () => {
         if (auth.currentUser?.uid !== uid) throw Error('Обліковий запис змінився.');
         await C.runTransaction(db,async transaction=>{
           const [preference,profile]=await Promise.all([transaction.get(C.doc(db,`users/${uid}/recordSettings/visibility`)),transaction.get(C.doc(db,`publicProfiles/${uid}`))]);
-          const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,profile.data()||{},programs);
+          const snapshots=profileSnapshots(sessions,preference.exists()?preference.data():null,manualSets,profile.data()||{},programs,streakSessions);
           if(!profile.exists())delete snapshots.calendar;
           for(const [kind,data] of Object.entries(snapshots))transaction.set(C.doc(db,`publicProfiles/${uid}/stats/${kind}`),data);
         });
@@ -884,6 +885,23 @@ async function initialize() {
         { kind: 'save', path: `users/${from}/sessions/${sessionId}`, data: stored }, notice(to, 'training_invite', id, from)]);
       } catch(error) {if(!await alreadySent())throw error;}
       return id;
+    },
+    watchWorkoutTurns(id,onChange,onError) {
+      return C.onSnapshot(C.doc(db,`trainingInvites/${id}/turns/current`),snapshot=>onChange(snapshot.exists()?snapshot.data():null),onError);
+    },
+    async updateWorkoutTurns(id,action,token='') {
+      requireOnline();const uid=auth.currentUser.uid;
+      const turnRef=C.doc(db,`trainingInvites/${id}/turns/current`);
+      try{return await timeout(C.runTransaction(db,async transaction=>{
+        const inviteRef=C.doc(db,`trainingInvites/${id}`);
+        const [invite,previous]=await Promise.all([transaction.get(inviteRef),transaction.get(turnRef)]);
+        const next=nextTurnState(invite.data(),uid,action,previous.exists()?previous.data():null,token);
+        if(next)transaction.set(turnRef,{...next,updatedAt:C.serverTimestamp()});
+        return next||previous.data()||null;
+      }),8000);}catch(error){
+        if(error.code==='permission-denied'){const current=(await C.getDocFromServer(turnRef)).data();if(turnActionApplied(current,uid,action,token))return current;}
+        throw error;
+      }
     },
     async trainingInvites() {
       requireOnline();

@@ -4,6 +4,11 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
+    "test:workout-tools-browser": "node tests/workout-tools.browser.mjs",
+    "test:auth-restore-browser": "node tests/auth-restore.browser.mjs",
+    "test:workout-flow-rules": "firebase emulators:exec --only firestore --project demo-gymb-flow \"node tests/workout-flow.rules.mjs\"",
+    "test:gym-music-browser": "node tests/gym-music.browser.mjs",
+    "test:gym-music-rules": "firebase emulators:exec --only firestore --project demo-gymb-display \"node tests/gym-music.rules.mjs\"",
     "build:achievements": "node scripts/build-achievements.mjs",
     "prepare:achievement-rules": "node scripts/update-spark-achievements.mjs && node scripts/update-training-experience-rules.mjs && node scripts/update-meeting-poll-rules.mjs && node scripts/update-exercise-notes-rules.mjs && node scripts/update-notification-history-rules.mjs && node scripts/update-profile-header-rules.mjs",
     "test:achievement-rules": "firebase emulators:exec --only firestore --project demo-nexus-gymb \"node qa/spark-achievements.rules.mjs\"",

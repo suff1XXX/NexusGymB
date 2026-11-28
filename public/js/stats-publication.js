@@ -1,5 +1,5 @@
-export async function statsSignature(sessions, manualSets, day, programs=[]) {
-  const bytes = new TextEncoder().encode(JSON.stringify([day, sessions, manualSets,programs]));
+export async function statsSignature(sessions, manualSets, day, programs=[],streakSessions=null) {
+  const bytes = new TextEncoder().encode(JSON.stringify([day, sessions, manualSets,programs,streakSessions]));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }

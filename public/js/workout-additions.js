@@ -25,17 +25,17 @@ export function sessionScope(session,programs=[]) {
   if(program)return program.scope==='home'?'home':'main';
   return 'unknown';
 }
-export function activityDays(sessions,programs,year,filter='all',today=localDate()) {
+export function activityDays(sessions,programs,year,filter='all',today=localDate(),from='',through=today) {
   if(!Number.isInteger(year)||year<1900||year>2200||!['all','main','home'].includes(filter))throw Error('Перевір рік і тип тренувань.');
   const groups=new Map();
   for(const session of sessions) {
-    if(!dateValid(session.date)||session.date>today||!session.date.startsWith(`${year}-`)||!countsAsWorkout(session))continue;
+    if(!dateValid(session.date)||session.date>today||(from&&session.date<from)||!session.date.startsWith(`${year}-`)||!countsAsWorkout(session))continue;
     const scope=sessionScope(session,programs);if(filter!=='all'&&scope!==filter)continue;
     const value=groups.get(session.date)||{date:session.date,main:0,home:0,unknown:0,ids:[]};value[scope]++;value.ids.push(session.id);groups.set(session.date,value);
   }
-  const dates=[];let date=new Date(`${year}-01-01T12:00:00Z`);
-  while(date.getUTCFullYear()===year){const key=date.toISOString().slice(0,10);dates.push(groups.get(key)||{date:key,main:0,home:0,unknown:0,ids:[]});date.setUTCDate(date.getUTCDate()+1);}
-  return {dates,days:groups.size,workouts:[...groups.values()].reduce((sum,d)=>sum+d.ids.length,0),offset:(new Date(`${year}-01-01T12:00:00Z`).getUTCDay()+6)%7};
+  const dates=[];const start=from&&from>`${year}-01-01`?from:`${year}-01-01`,end=from?through:`${year}-12-31`;let date=new Date(start+'T12:00:00Z');
+  while(date.getUTCFullYear()===year&&date.toISOString().slice(0,10)<=end){const key=date.toISOString().slice(0,10);dates.push(groups.get(key)||{date:key,main:0,home:0,unknown:0,ids:[]});date.setUTCDate(date.getUTCDate()+1);}
+  return {dates,days:groups.size,workouts:[...groups.values()].reduce((sum,d)=>sum+d.ids.length,0),offset:dates.length?(new Date(dates[0].date+'T12:00:00Z').getUTCDay()+6)%7:0};
 }
 function canReplace(session,index) {
   if(session?.status!=='active'||!Number.isInteger(index)||!session.items?.[index]||(session.logs||[]).some(log=>log.index===index)||session.simpleCompleted?.includes(index))throw Error('Замінити або повернути можна лише вправу без записаних результатів.');
@@ -62,4 +62,10 @@ export function pollData(value,now=new Date()) {
   const max=new Date(now.getTime()+90*86400000).toISOString().slice(0,10);
   if(clean.some(o=>!dateValid(o.date)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(o.time)||`${o.date}T${o.time}`<current||o.date>max)||new Set(clean.map(o=>o.date+'T'+o.time)).size!==clean.length)throw Error('Варіанти мають бути різними, майбутніми та в межах 90 днів. Час — за Києвом.');
   return {title,options:clean};
+}
+
+export function activityRegistrationDay(value,today=localDate()) {
+  const millis=typeof value?.toMillis==='function'?value.toMillis():typeof value?.seconds==='number'?value.seconds*1000:value;
+  const date=new Date(millis),day=Number.isFinite(date.getTime())?localDate(date):today;
+  return day>today?today:day;
 }

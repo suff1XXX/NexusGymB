@@ -108,9 +108,25 @@ service cloud.firestore {
         allow write: if self(uid)
           && collection in ['programs', 'sessions', 'exercises', 'exercisePreferences', 'programShares'];
       }
+      match /warmupTemplates/{id} {
+        allow read: if self(uid);
+        allow create, update: if self(uid) && request.resource.data.keys().hasAll(['name','text','createdAt','updatedAt'])
+          && request.resource.data.keys().hasOnly(['name','text','createdAt','updatedAt'])
+          && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60
+          && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 2000
+          && request.resource.data.createdAt is number && request.resource.data.createdAt >= 0
+          && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= request.resource.data.createdAt;
+        allow delete: if self(uid);
+      }
       match /trainingProfiles/{id} {
         allow read: if self(uid) || owner();
         allow create, update: if self(uid) && allowedTrainingProfile(uid,id) && validTrainingProfile();
+      }
+      match /trainingProfileSettings/streak {
+        allow get: if self(uid) || owner();
+        allow create, update: if self(uid) && request.resource.data.keys().hasAll(['shared','updatedAt'])
+          && request.resource.data.keys().hasOnly(['shared','updatedAt']) && request.resource.data.shared is bool
+          && request.resource.data.updatedAt is number && request.resource.data.updatedAt >= 0;
       }
       match /trainingProfileSettings/{id} {
         allow read: if self(uid) || owner();
@@ -396,6 +412,20 @@ service cloud.firestore {
           || data.photo.matches('data:image/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+'))
         && data.customId == profile.customId && data.joinedAt == profile.createdAt;
     }
+    function validProfilePlaylist(p) {
+      return p is map && p.keys().hasAll(['service','url','title']) && p.keys().hasOnly(['service','url','title'])
+        && p.title is string && p.title.size() <= 60 && p.url is string && p.url.size() <= 500
+        && ((p.get('service','') == 'spotify' && p.url.matches('https://open[.]spotify[.]com/playlist/[A-Za-z0-9]{22}'))
+          || (p.get('service','') == 'appleMusic' && p.url.matches('https://music[.]apple[.]com/[a-z]{2}/playlist/([A-Za-z0-9_%~.-]+/)?pl[.][A-Za-z0-9.-]+'))
+          || (p.get('service','') == 'soundcloud' && p.url.matches('https://soundcloud[.]com/[A-Za-z0-9_-]+/sets/[A-Za-z0-9_-]+')));
+    }
+    function validProfileMusic(music) {
+      return music is map && music.keys().hasOnly(['visible','playlists'])
+        && music.visible is bool && music.playlists is list && music.playlists.size() <= 3
+        && (music.playlists.size() < 1 || validProfilePlaylist(music.playlists[0]))
+        && (music.playlists.size() < 2 || validProfilePlaylist(music.playlists[1]))
+        && (music.playlists.size() < 3 || validProfilePlaylist(music.playlists[2]));
+    }
     function validContacts(contacts) {
       return contacts is map && contacts.keys().hasOnly(['instagram', 'telegram'])
         && contacts.get('instagram', '') is string && contacts.get('telegram', '') is string
@@ -449,6 +479,14 @@ service cloud.firestore {
         && request.resource.data.photo == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.photo
         && request.resource.data.customId == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.customId
         && request.resource.data.isPrivate == getAfter(/databases/$(database)/documents/publicProfiles/$(uid)).data.get('isPrivate',false);
+    }
+    match /publicProfiles/{uid}/music/{id} {
+      allow get: if id == 'playlists' && (self(uid) || (canViewProfile(uid) && resource.data.visible == true));
+      allow list: if false;
+      allow create, update: if self(uid) && id == 'playlists'
+        && request.resource.data.keys().hasAll(['visible','playlists'])
+        && validProfileMusic(request.resource.data);
+      allow delete: if self(uid) && id == 'playlists';
     }
     match /publicProfiles/{uid} {
       allow get: if canViewProfile(uid);
@@ -657,9 +695,9 @@ service cloud.firestore {
     // GymB ACHIEVEMENT BEGIN
     // Spark: automatic facts are computed from self-reported training data in the browser.
     // Rules enforce fixed scores, administrator-only grants and private source records.
-    function achievementScore(ids) { return ('first-workout' in ids ? 25 : 0) + ('five-workouts' in ids ? 75 : 0) + ('twenty-workouts' in ids ? 200 : 0) + ('fifty-workouts' in ids ? 400 : 0) + ('hundred-sets' in ids ? 120 : 0) + ('ten-tonnes' in ids ? 150 : 0) + ('three-weeks' in ids ? 180 : 0) + ('eight-exercises' in ids ? 80 : 0) + ('first-program' in ids ? 20 : 0) + ('five-plans' in ids ? 50 : 0) + ('personal-library' in ids ? 40 : 0) + ('first-bro' in ids ? 35 : 0) + ('squad' in ids ? 100 : 0) + ('profile-ready' in ids ? 30 : 0) + ('first-comment' in ids ? 15 : 0) + ('ten-comments' in ids ? 65 : 0) + ('seven-days' in ids ? 60 : 0) + ('thirty-days' in ids ? 180 : 0) + ('ceo-praise' in ids ? 300 : 0) + ('best-gymbro' in ids ? 150 : 0) + ('bad-gymbro' in ids ? 0 : 0) + ('gymbro-challenge' in ids ? 100 : 0); }
+    function achievementScore(ids) { return ('first-workout' in ids ? 25 : 0) + ('five-workouts' in ids ? 75 : 0) + ('twenty-workouts' in ids ? 200 : 0) + ('fifty-workouts' in ids ? 400 : 0) + ('hundred-sets' in ids ? 120 : 0) + ('ten-tonnes' in ids ? 150 : 0) + ('three-weeks' in ids ? 180 : 0) + ('eight-exercises' in ids ? 80 : 0) + ('first-program' in ids ? 20 : 0) + ('five-plans' in ids ? 50 : 0) + ('personal-library' in ids ? 40 : 0) + ('first-bro' in ids ? 35 : 0) + ('squad' in ids ? 100 : 0) + ('profile-ready' in ids ? 30 : 0) + ('first-comment' in ids ? 15 : 0) + ('ten-comments' in ids ? 65 : 0) + ('seven-days' in ids ? 60 : 0) + ('thirty-days' in ids ? 180 : 0) + ('forty-five-days' in ids ? 250 : 0) + ('ninety-days' in ids ? 500 : 0) + ('ceo-praise' in ids ? 300 : 0) + ('best-gymbro' in ids ? 150 : 0) + ('bad-gymbro' in ids ? 0 : 0) + ('gymbro-challenge' in ids ? 100 : 0) + ('hundred-workouts' in ids ? 750 : 0) + ('two-fifty-workouts' in ids ? 1500 : 0) + ('two-thousand-five-hundred-sets' in ids ? 700 : 0) + ('million-volume' in ids ? 1000 : 0) + ('twenty-six-weeks' in ids ? 1200 : 0) + ('fifty-shared-workouts' in ids ? 900 : 0); }
     function validAchievementIds(ids) {
-      return ids is list && ids.size() <= 22 && ids.toSet().size() == ids.size() && ids.hasOnly(['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge']);
+      return ids is list && ids.size() <= 30 && ids.toSet().size() == ids.size() && ids.hasOnly(['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','forty-five-days','ninety-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge','hundred-workouts','two-fifty-workouts','two-thousand-five-hundred-sets','million-volume','twenty-six-weeks','fifty-shared-workouts']);
     }
     function achievementManual(uid) {
       let p=/databases/$(database)/documents/users/$(uid)/achievementGrants/current;
@@ -669,15 +707,16 @@ service cloud.firestore {
       let p=/databases/$(database)/documents/users/$(uid)/achievementActivity/current;
       return existsAfter(p) ? getAfter(p).data.count : 0;
     }
-    function achievementEarned(f,manual) { return [].concat(('first-workout' in manual || f.workouts >= 1) ? ['first-workout'] : []).concat(('five-workouts' in manual || f.workouts >= 5) ? ['five-workouts'] : []).concat(('twenty-workouts' in manual || f.workouts >= 20) ? ['twenty-workouts'] : []).concat(('fifty-workouts' in manual || f.workouts >= 50) ? ['fifty-workouts'] : []).concat(('hundred-sets' in manual || f.sets >= 100) ? ['hundred-sets'] : []).concat(('ten-tonnes' in manual || f.volume >= 10000) ? ['ten-tonnes'] : []).concat(('three-weeks' in manual || f.bestStreak >= 3) ? ['three-weeks'] : []).concat(('eight-exercises' in manual || f.variety >= 8) ? ['eight-exercises'] : []).concat(('first-program' in manual || f.programs >= 1) ? ['first-program'] : []).concat(('five-plans' in manual || f.planned >= 5) ? ['five-plans'] : []).concat(('personal-library' in manual || f.exercises >= 5) ? ['personal-library'] : []).concat(('first-bro' in manual || f.friends >= 1) ? ['first-bro'] : []).concat(('squad' in manual || f.friends >= 5) ? ['squad'] : []).concat(('profile-ready' in manual || f.profileComplete >= 1) ? ['profile-ready'] : []).concat(('first-comment' in manual || f.comments >= 1) ? ['first-comment'] : []).concat(('ten-comments' in manual || f.comments >= 10) ? ['ten-comments'] : []).concat(('seven-days' in manual || f.activeDays >= 7) ? ['seven-days'] : []).concat(('thirty-days' in manual || f.activeDays >= 30) ? ['thirty-days'] : []).concat(('ceo-praise' in manual) ? ['ceo-praise'] : []).concat(('best-gymbro' in manual || f.sharedWorkouts >= 5) ? ['best-gymbro'] : []).concat(('bad-gymbro' in manual) ? ['bad-gymbro'] : []).concat(('gymbro-challenge' in manual || f.challenges >= 1) ? ['gymbro-challenge'] : []); }
+    function achievementAutomatic(f) { return [(f.workouts >= 1) ? 'first-workout' : '',(f.workouts >= 5) ? 'five-workouts' : '',(f.workouts >= 20) ? 'twenty-workouts' : '',(f.workouts >= 50) ? 'fifty-workouts' : '',(f.sets >= 100) ? 'hundred-sets' : '',(f.volume >= 10000) ? 'ten-tonnes' : '',(f.bestStreak >= 3) ? 'three-weeks' : '',(f.variety >= 8) ? 'eight-exercises' : '',(f.programs >= 1) ? 'first-program' : '',(f.planned >= 5) ? 'five-plans' : '',(f.exercises >= 5) ? 'personal-library' : '',(f.friends >= 1) ? 'first-bro' : '',(f.friends >= 5) ? 'squad' : '',(f.profileComplete >= 1) ? 'profile-ready' : '',(f.comments >= 1) ? 'first-comment' : '',(f.comments >= 10) ? 'ten-comments' : '',(f.activeDays >= 7) ? 'seven-days' : '',(f.activeDays >= 30) ? 'thirty-days' : '',(f.activeDays >= 45) ? 'forty-five-days' : '',(f.activeDays >= 90) ? 'ninety-days' : '',false ? 'ceo-praise' : '',(f.sharedWorkouts >= 5) ? 'best-gymbro' : '',false ? 'bad-gymbro' : '',(f.challenges >= 1) ? 'gymbro-challenge' : '',(f.workouts >= 100) ? 'hundred-workouts' : '',(f.workouts >= 250) ? 'two-fifty-workouts' : '',(f.sets >= 2500) ? 'two-thousand-five-hundred-sets' : '',(f.volume >= 1000000) ? 'million-volume' : '',(f.bestStreak >= 26) ? 'twenty-six-weeks' : '',(f.sharedWorkouts >= 50) ? 'fifty-shared-workouts' : ''].removeAll(['']); }
+    // Compare membership once instead of repeating grant lookups per medal.
+    function achievementEarned(f,manual) { return achievementAutomatic(f).toSet().union(manual.toSet()); }
     function validAchievementProgress(uid) {
       let d=request.resource.data;
       let manual=achievementManual(uid);
       let f=d.facts;
-      let earned=achievementEarned(f,manual);
       return d.keys().hasOnly(['earnedIds','manualIds','facts','score','catalogVersion','eventsVersion','updatedAt'])
         && d.catalogVersion == 3 && d.eventsVersion == 1 && d.updatedAt == request.time
-        && f is map && f.keys().hasAll(['workouts','sets','volume','bestStreak','variety','sharedWorkouts','programs','planned','exercises','friends','profileComplete','comments','activeDays','challenges'])
+        && f is map
         && f.keys().hasOnly(['workouts','sets','volume','bestStreak','variety','sharedWorkouts','programs','planned','exercises','friends','profileComplete','comments','activeDays','challenges'])
         && f.workouts is int && f.workouts >= 0 && f.workouts <= 1000000
         && f.sets is int && f.sets >= 0 && f.sets <= 20000000
@@ -691,10 +730,13 @@ service cloud.firestore {
         && f.friends is int && f.friends >= 0 && f.friends <= 100000
         && f.profileComplete is int && f.profileComplete >= 0 && f.profileComplete <= 1
         && f.comments is int && f.comments >= 0 && f.comments <= 1000000
-        && f.activeDays is int && f.activeDays >= 0 && f.activeDays <= 30
+        && f.activeDays is int && f.activeDays >= 0 && f.activeDays <= 90
         && f.challenges is int && f.challenges >= 0 && f.challenges <= 100000
         && f.activeDays == achievementDays(uid)
-        && d.earnedIds == earned && d.manualIds == manual && d.score == achievementScore(earned);
+        && d.manualIds == manual && d.earnedIds is list
+        && d.earnedIds.toSet().size() == d.earnedIds.size()
+        && d.earnedIds.toSet() == achievementEarned(f,d.manualIds)
+        && d.score == achievementScore(d.earnedIds);
     }
     function achievementSettings(uid) {
       let p=/databases/$(database)/documents/users/$(uid)/achievementSettings/display;
@@ -718,7 +760,7 @@ service cloud.firestore {
       allow read: if owner();
       allow create: if owner() && request.resource.data.keys().hasAll(['medalId','action','note','actorId','createdAt'])
         && request.resource.data.keys().hasOnly(['medalId','action','note','actorId','createdAt'])
-        && request.resource.data.medalId in ['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge'] && request.resource.data.action in ['grant','revoke']
+        && request.resource.data.medalId in ['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','forty-five-days','ninety-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge','hundred-workouts','two-fifty-workouts','two-thousand-five-hundred-sets','million-volume','twenty-six-weeks','fifty-shared-workouts'] && request.resource.data.action in ['grant','revoke']
         && request.resource.data.note is string && request.resource.data.note.size() <= 200
         && request.resource.data.actorId == request.auth.uid && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
@@ -736,7 +778,7 @@ service cloud.firestore {
         && request.resource.data.count == 1 && request.resource.data.lastDay == int(request.time.toMillis() / 86400000) && request.resource.data.updatedAt == request.time;
       allow update: if self(uid) && id == 'current' && request.resource.data.keys().hasAll(['count','lastDay','updatedAt']) && request.resource.data.keys().hasOnly(['count','lastDay','updatedAt'])
         && request.resource.data.lastDay == int(request.time.toMillis() / 86400000) && request.resource.data.lastDay > resource.data.lastDay
-        && request.resource.data.count == (resource.data.count < 30 ? resource.data.count + 1 : 30) && request.resource.data.updatedAt == request.time;
+        && request.resource.data.count == (resource.data.count < 90 ? resource.data.count + 1 : 90) && request.resource.data.updatedAt == request.time;
     }
     match /users/{uid}/achievementDays/{day} { allow read, write: if false; }
     match /users/{uid}/achievementSettings/{id} {
@@ -777,6 +819,53 @@ service cloud.firestore {
       return exists(p) && s.status == 'completed' && s.invitationId == id && s.date == invite.date
         && s.gymBroId == (invite.from == uid ? invite.to : invite.from)
         && (s.logs.size() > 0 || s.get('simpleCompleted',[]).size() > 0 || (s.items.size() == 0 && s.get('description','').size() > 0 && s.get('endedEarly',false) == false));
+    }
+    function validTurnShape(invite,d) {
+      return d.keys().hasAll(['joined','turnUid','revision','lastSets','lastActor','lastAction','updatedAt'])
+        && d.keys().hasOnly(['joined','turnUid','revision','lastSets','lastActor','lastAction','updatedAt'])
+        && d.joined is list && d.joined.size() <= 2 && d.joined.toSet().size() == d.joined.size() && d.joined.hasOnly(invite.members)
+        && d.turnUid is string && (d.joined.size() == 0 ? d.turnUid == '' : d.turnUid in d.joined)
+        && d.revision is int && d.revision >= 1 && d.lastActor == request.auth.uid
+        && d.lastAction in ['join','leave','pass','set'] && d.updatedAt == request.time
+        && d.lastSets is map && d.lastSets.keys().hasAll(invite.members) && d.lastSets.keys().hasOnly(invite.members)
+        && d.lastSets[invite.from] is string && d.lastSets[invite.from].size() <= 200
+        && d.lastSets[invite.to] is string && d.lastSets[invite.to].size() <= 200;
+    }
+    function activeTurnSession(id,action) {
+      let s=get(/databases/$(database)/documents/users/$(request.auth.uid)/sessions/$('invite_' + id)).data;
+      return s.invitationId == id && (s.status == 'active' || (action == 'set' && s.status == 'completed'));
+    }
+    function turnSession(id,action) { return action == 'leave' || activeTurnSession(id,action); }
+    function validTurnUpdate(invite,d,old) {
+      let uid=request.auth.uid;
+      let other=invite.from == uid ? invite.to : invite.from;
+      return d.revision == old.revision + 1 && (
+        (d.lastAction == 'join' && !(uid in old.joined) && d.joined == old.joined.concat([uid])
+          && d.turnUid == (old.joined.size() == 0 ? uid : old.turnUid) && d.lastSets == old.lastSets)
+        || (d.lastAction == 'leave' && uid in old.joined && d.joined == old.joined.removeAll([uid])
+          && d.turnUid == (old.turnUid == uid ? (other in d.joined ? other : '') : old.turnUid) && d.lastSets == old.lastSets)
+        || (d.lastAction in ['pass','set'] && old.joined.size() == 2 && old.turnUid == uid && d.joined == old.joined && d.turnUid == other
+          && ((d.lastAction == 'pass' && d.lastSets == old.lastSets)
+            || (d.lastAction == 'set' && d.lastSets.diff(old.lastSets).affectedKeys().hasOnly([uid])
+              && d.lastSets[uid].size() > 0 && d.lastSets[uid] != old.lastSets[uid])))
+      );
+    }
+    match /trainingInvites/{id}/turns/{key} {
+      allow get: if key == 'current' && completionMember(get(/databases/$(database)/documents/trainingInvites/$(id)).data);
+      allow list, delete: if false;
+      allow create: if key == 'current'
+        && completionMember(get(/databases/$(database)/documents/trainingInvites/$(id)).data)
+        && get(/databases/$(database)/documents/trainingInvites/$(id)).data.status == 'accepted'
+        && validTurnShape(get(/databases/$(database)/documents/trainingInvites/$(id)).data,request.resource.data)
+        && turnSession(id,'join') && request.resource.data.lastAction == 'join' && request.resource.data.revision == 1
+        && request.resource.data.joined == [request.auth.uid] && request.resource.data.turnUid == request.auth.uid
+        && request.resource.data.lastSets.values().hasOnly(['']);
+      allow update: if key == 'current'
+        && completionMember(get(/databases/$(database)/documents/trainingInvites/$(id)).data)
+        && get(/databases/$(database)/documents/trainingInvites/$(id)).data.status == 'accepted'
+        && validTurnShape(get(/databases/$(database)/documents/trainingInvites/$(id)).data,request.resource.data)
+        && turnSession(id,request.resource.data.lastAction)
+        && validTurnUpdate(get(/databases/$(database)/documents/trainingInvites/$(id)).data,request.resource.data,resource.data);
     }
     match /trainingInvites/{id}/completions/{uid} {
       allow get: if completionMember(get(/databases/$(database)/documents/trainingInvites/$(id)).data)
@@ -897,7 +986,7 @@ service cloud.firestore {
     match /users/{uid}/achievementEvents/{medal} {
       allow get: if self(uid) || owner();
       allow list: if self(uid);
-      allow create: if (self(uid) || owner()) && medal in ['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge']
+      allow create: if (self(uid) || owner()) && medal in ['first-workout','five-workouts','twenty-workouts','fifty-workouts','hundred-sets','ten-tonnes','three-weeks','eight-exercises','first-program','five-plans','personal-library','first-bro','squad','profile-ready','first-comment','ten-comments','seven-days','thirty-days','forty-five-days','ninety-days','ceo-praise','best-gymbro','bad-gymbro','gymbro-challenge','hundred-workouts','two-fifty-workouts','two-thousand-five-hundred-sets','million-volume','twenty-six-weeks','fifty-shared-workouts']
         && request.resource.data.keys().hasAll(['medalId','source','reason','earnedAt','read'])
         && request.resource.data.keys().hasOnly(['medalId','source','reason','earnedAt','read'])
         && request.resource.data.medalId == medal && request.resource.data.read == false && request.resource.data.earnedAt == request.time

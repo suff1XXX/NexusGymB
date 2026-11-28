@@ -1,17 +1,17 @@
 const storageKey='nexus:auth-language';
 const copy={
   uk:{
-    pageTitle:'Вхід та реєстрація',login:'Вхід',register:'Реєстрація',welcome:'З поверненням.',create:'Почнемо твою історію.',
-    loginDescription:'Твій наступний крок починається тут.',registerDescription:'Створи акаунт і збери всі тренування в одному місці.',
+    pageTitle:'Вхід та реєстрація',login:'Вхід',register:'Реєстрація',welcome:'З поверненням.',create:'Створити акаунт',
+    loginDescription:'Увійди, щоб відкрити свої тренування.',registerDescription:'Створи акаунт і збери всі тренування в одному місці.',
     name:'Ім’я',namePlaceholder:'Як до тебе звертатися?',email:'Електронна пошта',password:'Пароль',confirm:'Повтори пароль',
     passwordPlaceholder:'Введи пароль',newPasswordPlaceholder:'Створи пароль',confirmPlaceholder:'Ще раз, для впевненості',
     show:'Показати пароль',hide:'Приховати пароль',signIn:'Увійти',signUp:'Створити акаунт',forgot:'Забули пароль?',
     passwordHint:'Щонайменше 8 символів. Після реєстрації підтвердь пошту.',language:'Вибрати мову',authLabel:'Вхід або реєстрація',
-    eyebrow:'ТВІЙ ПРОСТІР ДЛЯ ТРЕНУВАНЬ',heroTop:'Твій ритм.',heroBottom:'Твій прогрес.',
-    heroDescription:'Плануй тренування, записуй кожен підхід і помічай, як далеко ти вже зайшов.',
+    eyebrow:'ТВІЙ ПРОСТІР ДЛЯ ТРЕНУВАНЬ',heroTop:'Програми.',heroBottom:'Результати.',
+    heroDescription:'Програми тренувань, облік підходів і статистика результатів.',
     featurePlan:'План під тебе',featureProgress:'Прогрес у деталях',featureFriends:'GymBro поруч',
-    preview:'ТВІЙ ПРОГРЕС, НАОЧНО',previewTitle:'Кожен підхід має значення.',chartLabel:'Приклад щоденника тренувань',
-    journal:'ЩОДЕННИК ТРЕНУВАНЬ',consistency:'Крок за кроком',workout:'Тренування',workoutName:'Твій наступний крок',
+    preview:'ТВІЙ ПРОГРЕС, НАОЧНО',previewTitle:'Підходи та повторення.',chartLabel:'Приклад щоденника тренувань',
+    journal:'ЩОДЕННИК ТРЕНУВАНЬ',consistency:'Історія результатів',workout:'Тренування',workoutName:'Тренування на сьогодні',
     sets:'Підходи',reps:'Повторення',ready:' ',footer:'',
     footerNote:' ',verifyTitle:'Підтвердь пошту',verifyBefore:'Відкрий лист на',
     verifyAfter:'і натисни посилання. Потім повернися сюди.',yourEmail:'своїй пошті',verified:'Я підтвердив пошту',
@@ -26,19 +26,19 @@ const copy={
     tooMany:'Забагато спроб. Зачекай трохи та повтори.',disabled:'Цей обліковий запис вимкнений.',unavailable:'Вхід тимчасово недоступний. Спробуй пізніше.',
   },
   en:{
-    pageTitle:'Sign in & create an account',login:'Sign in',register:'Sign up',welcome:'Welcome back.',create:'Start your story.',
-    loginDescription:'Your next step starts right here.',registerDescription:'Create an account and keep every workout in one place.',
+    pageTitle:'Sign in & create an account',login:'Sign in',register:'Sign up',welcome:'Welcome back.',create:'Create an account',
+    loginDescription:'Sign in to access your workouts.',registerDescription:'Create an account and keep every workout in one place.',
     name:'Your name',namePlaceholder:'What should we call you?',email:'Email address',password:'Password',confirm:'Confirm password',
     passwordPlaceholder:'Enter your password',newPasswordPlaceholder:'Create a password',confirmPlaceholder:'One more time, just to be sure',
     show:'Show password',hide:'Hide password',signIn:'Sign in',signUp:'Create account',forgot:'Forgot password?',
     passwordHint:'At least 8 characters. Verify your email after signing up.',language:'Choose language',authLabel:'Sign in or create an account',
-    eyebrow:'YOUR SPACE TO TRAIN',heroTop:'Your rhythm.',heroBottom:'Your progress.',
-    heroDescription:'Plan your workouts, log every set, and see just how far you’ve come.',
+    eyebrow:'YOUR SPACE TO TRAIN',heroTop:'Programs.',heroBottom:'Results.',
+    heroDescription:'Workout programs, set tracking, and result statistics.',
     featurePlan:'A plan for you',featureProgress:'Every detail counts',featureFriends:'Your GymBro, closer',
-    preview:'YOUR PROGRESS, AT A GLANCE',previewTitle:'Every set tells a story.',chartLabel:'Example workout journal',
-    journal:'WORKOUT JOURNAL',consistency:'One step at a time',workout:'Workout',workoutName:'Your next step',
-    sets:'Sets',reps:'Reps',ready:'It starts with you',footer:'Less chaos. More progress.',
-    footerNote:'Your personal training space.',verifyTitle:'Verify your email',verifyBefore:'Open the email sent to',
+    preview:'YOUR PROGRESS, AT A GLANCE',previewTitle:'Sets and repetitions.',chartLabel:'Example workout journal',
+    journal:'WORKOUT JOURNAL',consistency:'Result history',workout:'Workout',workoutName:'Today’s workout',
+    sets:'Sets',reps:'Reps',ready:'',footer:'',
+    footerNote:'',verifyTitle:'Verify your email',verifyBefore:'Open the email sent to',
     verifyAfter:'and follow the link. Then come back here.',yourEmail:'your inbox',verified:'I’ve verified my email',
     resend:'Resend verification email',logout:'Sign out',spam:'Can’t find the email? Check your spam folder.',
     sent:'Email sent. Check your inbox and spam folder.',created:'Account created. Your verification email is on its way.',
@@ -79,6 +79,7 @@ export function authFailure(key) { return Object.assign(Error(authText(key)),{au
 const globe='<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18M5 6.5h14M5 17.5h14"/></svg>';
 const flagUk='<svg viewBox="0 0 30 20" aria-hidden="true"><path fill="#063b87" d="M0 0h30v20H0z"/><path stroke="#fff" stroke-width="5" d="m0 0 30 20m0-20L0 20"/><path stroke="#e52b40" stroke-width="2" d="m0 0 30 20m0-20L0 20"/><path fill="#fff" d="M12 0h6v20h-6zM0 6h30v8H0z"/><path fill="#e52b40" d="M13 0h4v20h-4zM0 8h30v4H0z"/></svg>';
 const flagUa='<svg viewBox="0 0 30 20" aria-hidden="true"><path fill="#0879df" d="M0 0h30v10H0z"/><path fill="#ffd51d" d="M0 10h30v10H0z"/></svg>';
+export const languageFlag=language=>language==='en'?flagUk:flagUa;
 const arrow='<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>';
 const eye='<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>';
 function languageMenu() {
@@ -91,11 +92,11 @@ export function renderAuthPanel({mode='login',draft={},notice='',user=null,conne
   if (user && !user.emailVerified) return `<section class="auth-panel"><div class="auth-verification-icon" aria-hidden="true">${globe}</div><h1 tabindex="-1">${t('verifyTitle')}</h1><p class="auth-description">${t('verifyBefore')} <strong>${escape(user.email || t('yourEmail'))}</strong> ${t('verifyAfter')}</p>${message}<div class="stack"><button class="btn wide" data-action="check-email">${t('verified')}</button><button class="btn secondary wide" data-action="resend-email">${t('resend')}</button><button class="btn ghost wide" data-action="logout">${t('logout')}</button></div><p class="auth-footnote">${t('spam')}</p></section>`;
   const register=mode === 'register';
   const passwordField=(name,label,placeholder)=>`<label class="auth-field auth-password-field"><span>${label}</span><span class="auth-input-wrap"><input type="password" name="${name}" placeholder="${placeholder}" autocomplete="${register?'new-password':'current-password'}" ${register?'minlength="8"':''} maxlength="4096" value="${escape(draft[name] || '')}" required /><button type="button" class="auth-password-toggle" data-action="toggle-auth-password" aria-label="${t('show')}" aria-pressed="false">${eye}</button></span></label>`;
-  return `<section class="auth-panel"><div class="auth-tabs" aria-label="${t('authLabel')}"><span class="auth-tab-indicator" aria-hidden="true" style="transform:translateX(${register?'100%':'0'})"></span>${[['login',t('login')],['register',t('register')]].map(([value,label])=>`<button type="button" class="btn ghost" data-action="auth-mode" data-id="${value}" aria-pressed="${value === mode}">${label}</button>`).join('')}</div><div class="auth-heading"><span class="auth-card-eyebrow">NEXUS GYMB / ${t('journal')}</span><h1 tabindex="-1">${register?t('create'):t('welcome')}</h1><p class="auth-description">${register?t('registerDescription'):t('loginDescription')}</p></div>${message}<form id="auth-form">${register?`<label class="auth-field"><span>${t('name')}</span><input name="name" autocomplete="name" value="${escape(draft.name)}" maxlength="100" placeholder="${t('namePlaceholder')}" required /></label>`:''}<label class="auth-field"><span>${t('email')}</span><input type="email" name="email" autocomplete="email" value="${escape(draft.email)}" maxlength="320" placeholder="you@example.com" required /></label>${passwordField('password',t('password'),register?t('newPasswordPlaceholder'):t('passwordPlaceholder'))}${register?passwordField('confirm',t('confirm'),t('confirmPlaceholder')):''}${register?`<p class="auth-password-hint">${t('passwordHint')}</p>`:`<button type="button" class="auth-link" data-action="reset-password" ${connected?'':'disabled'}>${t('forgot')}</button>`}<button type="submit" class="btn wide auth-submit" ${connected?'':'disabled'}><span>${register?t('signUp'):t('signIn')}</span>${arrow}</button><div class="form-error" role="alert"></div></form><p class="auth-footnote"><span aria-hidden="true">✦</span> ${t('ready')}</p></section>`;
+  return `<section class="auth-panel"><div class="auth-tabs" aria-label="${t('authLabel')}"><span class="auth-tab-indicator" aria-hidden="true" style="transform:translateX(${register?'100%':'0'})"></span>${[['login',t('login')],['register',t('register')]].map(([value,label])=>`<button type="button" class="btn ghost" data-action="auth-mode" data-id="${value}" aria-pressed="${value === mode}">${label}</button>`).join('')}</div><div class="auth-heading"><span class="auth-card-eyebrow">NEXUS GYMB / ${t('journal')}</span><h1 tabindex="-1">${register?t('create'):t('welcome')}</h1><p class="auth-description">${register?t('registerDescription'):t('loginDescription')}</p></div>${message}<form id="auth-form">${register?`<label class="auth-field"><span>${t('name')}</span><input name="name" autocomplete="name" value="${escape(draft.name)}" maxlength="100" placeholder="${t('namePlaceholder')}" required /></label>`:''}<label class="auth-field"><span>${t('email')}</span><input type="email" name="email" autocomplete="email" value="${escape(draft.email)}" maxlength="320" placeholder="you@example.com" required /></label>${passwordField('password',t('password'),register?t('newPasswordPlaceholder'):t('passwordPlaceholder'))}${register?passwordField('confirm',t('confirm'),t('confirmPlaceholder')):''}${register?`<p class="auth-password-hint">${t('passwordHint')}</p>`:`<button type="button" class="auth-link" data-action="reset-password" ${connected?'':'disabled'}>${t('forgot')}</button>`}<button type="submit" class="btn wide auth-submit" ${connected?'':'disabled'}><span>${register?t('signUp'):t('signIn')}</span>${arrow}</button><div class="form-error" role="alert"></div></form>${t('ready').trim()?`<p class="auth-footnote">${t('ready')}</p>`:''}</section>`;
 }
 function renderShell(brand) {
   const t=authText;
-  return `<main class="login"><div class="auth-atmosphere" aria-hidden="true"><i></i><i></i><div class="auth-grid"></div></div><header class="auth-header"><a class="brand auth-brand" href="index.html" aria-label="Nexus GymB">${brand}</a>${languageMenu()}</header><div class="auth-layout"><aside class="auth-intro"><span class="auth-eyebrow"><i aria-hidden="true"></i>${t('eyebrow')}</span><h2>${t('heroTop')}<br><em>${t('heroBottom')}</em></h2><p>${t('heroDescription')}</p><div class="auth-features"><span>${t('featurePlan')}</span><span>${t('featureProgress')}</span><span>${t('featureFriends')}</span></div><div class="auth-visual" role="img" aria-label="${t('chartLabel')}"><div class="auth-visual-top"><span><i class="auth-live-dot"></i>${t('preview')}</span><span class="auth-chart-icon" aria-hidden="true">↗</span></div><h3>${t('previewTitle')}</h3><div class="auth-chart" aria-hidden="true">${[24,38,32,51,60,54,78,100].map((height,k)=>`<i style="--bar-height:${height}%;--bar-delay:${k*45}ms"></i>`).join('')}</div><div class="auth-visual-bottom"><span>${t('consistency')}</span><span>Nexus GymB</span></div><div class="auth-floating-note"><span class="auth-note-icon" aria-hidden="true">✓</span><span><strong>${t('workoutName')}</strong><small>${t('sets')} · ${t('reps')} · ${t('workout')}</small></span></div></div></aside><section class="auth-card is-entering" aria-label="${t('authLabel')}"><div id="auth-content"></div><div id="login-error" role="alert"></div></section></div><footer class="auth-footer"><span>${t('footer')}</span><span>${t('footerNote')}</span></footer></main>`;
+  return `<main class="login"><div class="auth-atmosphere" aria-hidden="true"><i></i><i></i><div class="auth-grid"></div></div><header class="auth-header"><a class="brand auth-brand" href="index.html" aria-label="Nexus GymB">${brand}</a>${languageMenu()}</header><div class="auth-layout"><aside class="auth-intro"><span class="auth-eyebrow"><i aria-hidden="true"></i>${t('eyebrow')}</span><h2>${t('heroTop')}<br><em>${t('heroBottom')}</em></h2><p>${t('heroDescription')}</p><div class="auth-features"><span>${t('featurePlan')}</span><span>${t('featureProgress')}</span><span>${t('featureFriends')}</span></div><div class="auth-visual" role="img" aria-label="${t('chartLabel')}"><div class="auth-visual-top"><span><i class="auth-live-dot"></i>${t('preview')}</span><span class="auth-chart-icon" aria-hidden="true">↗</span></div><h3>${t('previewTitle')}</h3><div class="auth-chart" aria-hidden="true">${[24,38,32,51,60,54,78,100].map((height,k)=>`<i style="--bar-height:${height}%;--bar-delay:${k*45}ms"></i>`).join('')}</div><div class="auth-visual-bottom"><span>${t('consistency')}</span><span>Nexus GymB</span></div><div class="auth-floating-note"><span class="auth-note-icon" aria-hidden="true">✓</span><span><strong>${t('workoutName')}</strong><small>${t('sets')} · ${t('reps')} · ${t('workout')}</small></span></div></div></aside><section class="auth-card is-entering" aria-label="${t('authLabel')}"><div id="auth-content"></div><div id="login-error" role="alert"></div></section></div>${t('footer').trim()||t('footerNote').trim()?`<footer class="auth-footer"><span>${t('footer')}</span><span>${t('footerNote')}</span></footer>`:''}</main>`;
 }
 function captureDraft(root,draft) {
   const form=root.querySelector('#auth-form');

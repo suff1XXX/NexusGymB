@@ -1,3 +1,4 @@
+import {validWorkoutQueue} from './workout-queue.js';
 import { validWeightDetails } from './weight-details.js';
 import { dropSetValid } from './training-methods.js';
 import { validReps } from './repetitions.js';
@@ -14,7 +15,9 @@ export function undoLastSet(session) {
     s.simpleCompleted=(s.simpleCompleted||[]).filter(index=>index!==last.index);
   }
   if (s.executionMode === 'mixed') s.detailedIndex=[s.index];
-  s.skipped = s.skipped.filter((index) => index < s.index);
+  s.skipped = s.skipped.filter((index) => index !== s.index);
+  if(s.skipDetails)s.skipDetails=Object.fromEntries(Object.entries(s.skipDetails).filter(([index])=>s.skipped.includes(Number(index))));
+  s.deferred=(s.deferred||[]).filter(index=>index!==s.index);
   s.restEnd = 0; s.timerEnd = 0;
   return s;
 }
@@ -34,6 +37,8 @@ export function validSession(s) {
   if (s.status === 'active' && s.items.length && s.index >= s.items.length ||
       s.status === 'completed' && (s.index !== s.items.length || s.endedAt < s.startedAt) ||
       s.status === 'planned' && (s.index !== 0 || s.logs.length || s.skipped.length)) return false;
+  if(!validWorkoutQueue(s))return false;
+  if(s.plannedItems!==undefined&&(!Array.isArray(s.plannedItems)||!validProgram({name:s.name,type:'Власна програма',days:[{weekday:0,name:s.name,groups:'',description:s.description||'',items:s.plannedItems}]})))return false;
   const counts = new Map();
   return s.skipped.every((i) => Number.isInteger(i) && i >= 0 && i < s.items.length) && s.logs.every((l, position) => {
     const item = s.items[l?.index];

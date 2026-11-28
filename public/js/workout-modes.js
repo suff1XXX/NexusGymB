@@ -1,3 +1,4 @@
+import {finalizeSkipped} from './workout-queue.js';
 import { weightDetails, weightDetailsLabel } from './weight-details.js';
 import { isWorkingSet } from './training-methods.js';
 import { parseReps, machineName } from './repetitions.js';
@@ -24,6 +25,39 @@ export function simpleDone(session, index) {
   if(s.freeCompleted?.includes(index)){s.freeCompleted=s.freeCompleted.filter(value=>value!==index);done.delete(index);}
   else if (done.has(index)) done.delete(index); else done.add(index);
   s.simpleCompleted = [...done];
+  if(done.has(index)){s.skipped=(s.skipped||[]).filter(k=>k!==index);s.deferred=(s.deferred||[]).filter(k=>k!==index);if(s.skipDetails)delete s.skipDetails[index];}
+  return s;
+}
+
+// Remove a mistaken completion together with its results, keeping other exercises intact.
+export function resetExercise(session, index) {
+  if (session?.status !== 'active' || !Number.isInteger(index) || !session.items[index]) throw Error('Вправу не знайдено.');
+  const s = copy(session), removed = new Set();
+  s.logs.forEach((log, position) => { if (log.index === index) removed.add(position); });
+  s.logs = withoutLogs(s.logs, removed);
+  for (const key of ['simpleCompleted', 'freeCompleted', 'skipped']) s[key] = (s[key] || []).filter(value => value !== index);
+  s.index = index;
+  s.deferred=(s.deferred||[]).filter(k=>k!==index);if(s.skipDetails)delete s.skipDetails[index];
+  s.restEnd = 0; s.timerEnd = 0;
+  return s;
+}
+
+function withoutLogs(logs, removed) {
+  const positions = new Map();
+  logs.forEach((log, index) => { if (!removed.has(index)) positions.set(index, positions.size); });
+  return logs.flatMap((log, index) => removed.has(index) ? [] : [{ ...log, ...(log.dropOf !== undefined ? { dropOf: positions.get(log.dropOf) } : {}) }]);
+}
+
+export function removeWorkoutLog(session, position) {
+  if (session?.status !== 'active' || !Number.isInteger(position) || !session.logs[position]) throw Error('Запис не знайдено.');
+  const s = copy(session), log = s.logs[position], removed = new Set([position]);
+  s.logs.forEach((entry, index) => { if (removed.has(entry.dropOf)) removed.add(index); });
+  s.logs = withoutLogs(s.logs, removed);
+  for (const key of ['simpleCompleted', 'freeCompleted']) s[key] = (s[key] || []).filter(index => index !== log.index);
+  s.index = log.index;
+  s.deferred=(s.deferred||[]).filter(k=>k!==log.index);if(s.skipDetails)delete s.skipDetails[log.index];
+  s.skipped = (s.skipped || []).filter(index => index !== log.index);
+  s.restEnd = 0; s.timerEnd = 0;
   return s;
 }
 
@@ -41,7 +75,7 @@ export function finishChecklist(session) {
   if (session?.status !== 'active') throw Error('Немає активного тренування.');
   const done = new Set(session.simpleCompleted || []);
   const skipped = session.items.flatMap((item, index) => done.has(index) || session.logs.filter(l => l.index === index && isWorkingSet(l)).length >= (session.setTrackingMode==='free'?1:item.sets) ? [] : [index]);
-  return { ...copy(session), skipped, status: 'completed', index: session.items.length, endedAt: Date.now(), restEnd: 0, timerEnd: 0 };
+  return finalizeSkipped({ ...copy(session), skipped:[...new Set([...(session.skipped||[]),...skipped])], status: 'completed', index: session.items.length, endedAt: Date.now(), restEnd: 0, timerEnd: 0 });
 }
 
 export function alternatives(exercises, source) {

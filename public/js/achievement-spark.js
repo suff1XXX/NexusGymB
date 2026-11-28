@@ -1,6 +1,6 @@
 import {achievementCatalog,evaluateAchievements} from './achievement-catalog.js';
 
-export const achievementMetricLimits={workouts:1000000,sets:20000000,volume:1000000000000,bestStreak:100000,variety:100000,sharedWorkouts:1000000,programs:100000,planned:1000000,exercises:100000,friends:100000,profileComplete:1,comments:1000000,activeDays:30,challenges:100000};
+export const achievementMetricLimits={workouts:1000000,sets:20000000,volume:1000000000000,bestStreak:100000,variety:100000,sharedWorkouts:1000000,programs:100000,planned:1000000,exercises:100000,friends:100000,profileComplete:1,comments:1000000,activeDays:90,challenges:100000};
 export function sparkProgress(source={},manualIds=[]) {
   const facts=Object.fromEntries(Object.entries(achievementMetricLimits).map(([key,max])=>[key,Math.min(max,Math.max(0,Math.floor(Number(source[key])||0)))]));
   const ids=achievementCatalog.filter(medal=>manualIds.includes(medal.id)).map(medal=>medal.id);
